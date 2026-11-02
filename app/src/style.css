@@ -68,8 +68,13 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
   overflow: hidden;
   z-index: 3; /* 地図の操作ボタン・出典（z-index 2）より手前 */
 }
-.panel.steps { left: 10px; }
-.panel.steps.wide { width: 420px; } /* 一覧の要る手順では広げる。地番と面積と木の列が折り返さずに入る幅 */
+.panel.steps { left: 10px; width: auto; flex-direction: row; --list-w: 380px; }
+.panel.steps .steps-col { width: 290px; flex: none; display: flex; flex-direction: column; min-height: 0; }
+/* 一覧の列。手順の右に縦に出し、幅はドラッグ（.resizer）で変える */
+.panel.steps .list-col { width: var(--list-w); flex: none; position: relative; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
+.panel.steps.resizing { transition: none; user-select: none; }
+.resizer { position: absolute; top: 0; bottom: 0; right: -3px; width: 7px; cursor: col-resize; z-index: 1; }
+.resizer:hover, .resizing .resizer { background: rgba(198, 40, 40, 0.25); }
 .panel.detail { right: 10px; width: 320px; bottom: auto; max-height: calc(100% - 20px); }
 .panel.collapsed.steps { transform: translateX(calc(-100% - 20px)); opacity: 0; pointer-events: none; }
 .panel.collapsed.detail { transform: translateX(calc(100% + 20px)); opacity: 0; pointer-events: none; }
@@ -85,7 +90,9 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .step-list li.done .num { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
 .step-list li.current { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
 .step-list li.current .num { background: var(--accent); border-color: var(--accent); color: #fff; }
-.step-body { padding: 12px 14px; overflow: auto; flex: none; max-height: 45%; }
+.step-body { padding: 12px 14px; overflow: auto; flex: 1; min-height: 0; }
+.step-body .nav { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.step-body .nav .pos { flex: 1; text-align: center; font-variant-numeric: tabular-nums; }
 .step-body h3 { margin: 0 0 6px; font-size: 15px; }
 .step-body p { margin: 0 0 10px; line-height: 1.6; }
 .step-body .next { background: #fff8e1; border-left: 3px solid #f9a825; padding: 8px 10px; margin: 10px 0; border-radius: 4px; }
@@ -103,19 +110,20 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .badge.high { background: #e8f5e9; color: #2e7d32; }
 .badge.human { background: #e3f2fd; color: #1565c0; }
 
-/* 一覧（左のパネルの下半分） */
-.list-section { display: flex; flex-direction: column; flex: 1; min-height: 0; border-top: 1px solid var(--line); }
-.list-head { height: 34px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; cursor: pointer; font-weight: 600; background: #fafbfc; }
-.list-head .chev { margin-left: auto; transition: transform 0.2s; }
-.list-section.folded .chev { transform: rotate(-90deg); }
-.list-section.folded .list-body { display: none; }
+/* 一覧の列（タブで「かかる筆」「確かめる所」を切り替える） */
+.tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); background: #fafbfc; }
+.tab { flex: 1; border: 0; background: transparent; padding: 9px 8px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+.tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+.tab .count { font-weight: 400; font-size: 12px; }
 .list-body { overflow: auto; flex: 1; }
+.list-body .empty { padding: 14px; color: var(--muted); line-height: 1.6; }
 table.list { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.list th, table.list td { padding: 4px 8px; border-bottom: 1px solid #eef1f3; text-align: left; white-space: nowrap; }
 table.list th { position: sticky; top: 0; background: #fafbfc; color: var(--muted); font-weight: 600; }
 table.list tr { cursor: pointer; }
 table.list tr:hover td { background: #f3f5f7; }
 table.list tr.selected td { background: var(--accent-soft); }
+table.list tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tree-bar { display: inline-block; width: 36px; height: 8px; border-radius: 2px; background: #eceff1; vertical-align: middle; overflow: hidden; }
 .tree-bar i { display: block; height: 100%; background: #2e7d32; }
@@ -154,6 +162,11 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dialog label input[type="password"], .dialog label select { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; font-weight: 400; }
 .dialog label.row { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 .row.end { display: flex; justify-content: flex-end; }
+
+/* 用語の説明（panels.ts の help） */
+.help { display: inline-flex; width: 16px; height: 16px; border-radius: 50%; background: #e0e4e8; color: var(--muted); font-size: 11px; font-weight: 700; align-items: center; justify-content: center; cursor: help; vertical-align: 1px; margin: 0 2px; user-select: none; }
+.help:hover, .help:focus { background: var(--accent); color: #fff; outline: none; }
+.tip { position: fixed; z-index: 50; background: #1f2933; color: #fff; padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; box-shadow: var(--shadow); pointer-events: none; }
 
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

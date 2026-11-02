@@ -13,7 +13,7 @@ import { toPlane, type EN } from "./core/proj";
 import { NOT_LAND, type Judgment, type ParcelHit, type ParcelKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addParcels, addSection, addSegments, applyJudgments, createMap, KIND_COLORS, setGroupVisible, type LayerGroup } from "./map/map";
-import { buildLayout, escapeHtml, leftCover, openDetail, renderSteps, rightCover, STEPS } from "./ui/panels";
+import { buildLayout, escapeHtml, help, leftCover, openDetail, renderSteps, rightCover, showListTab, STEPS } from "./ui/panels";
 
 interface AppState {
   map: MlMap;
@@ -28,6 +28,8 @@ interface AppState {
   demoJudgments: Judgment[];
   selectedParcel: string | null;
   selectedSegment: string | null;
+  /** 「確かめる所」の何番目を見ているか（-1 はまだ）。手順 5 の前へ・次へと一覧の行で動く */
+  lowCursor: number;
   /** 判定の進み具合。null なら動いていない */
   run: { done: number; total: number; usd: number; log: string[]; cancel: boolean } | null;
 }
@@ -68,6 +70,7 @@ async function main() {
     demoJudgments,
     selectedParcel: null,
     selectedSegment: null,
+    lowCursor: -1,
     run: null,
   };
 
@@ -86,8 +89,17 @@ async function main() {
   document.getElementById("project-name")!.textContent = `${section.features[0].properties.road_name}（見本）`;
   renderStep(state);
   renderList(state);
+  renderChecks(state);
   wireSettings(state);
 }
+
+const HELP = {
+  band: "伐採範囲（仮）：輸送路の中心線から左右 3〜13m、つまり道路の端から外側 10m の帯です。軌跡図を取り込めるようになったら、その外側線から決めます。",
+  segment: "区切り：伐採範囲を道に沿って 10m ごと、左右別に分けたもの。番号 L032 は「起点から 320〜330m の左」。この1つずつについて、木の有無を航空写真から判定します。",
+  judged: "判定が付いている区切りの数。見本として最初から入っている Claude の判定、この道具から Claude に判定させたもの、人が直したものを合わせた数です。",
+  check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
+  review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
+};
 
 /* ---------- 手順 ---------- */
 
@@ -101,7 +113,7 @@ function renderStep(state: AppState) {
   const parts: string[] = [`<h3>${s.n}. ${s.title}</h3><p>${s.hint}</p>`];
   switch (state.step) {
     case 1:
-      parts.push(`<dl class="kv"><dt>案件名</dt><dd>小川村 県道401号（見本）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${Math.round(state.segments.at(-1)!.toM)} m</dd></dl>`);
+      parts.push(`<dl class="kv"><dt>案件名</dt><dd>小川村 県道401号（見本）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${Math.round(state.segments.at(-1)!.toM)} m</dd><dt>伐採範囲</dt><dd>仮：中心線から 3〜13m ${help(HELP.band)}</dd></dl>`);
       parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。見本では取り込み済みです。</div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
       break;
@@ -112,19 +124,23 @@ function renderStep(state: AppState) {
       break;
     case 3: {
       const kinds = countKinds(state);
-      parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲にかかります（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。</p>`);
+      parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲 ${help(HELP.band)} にかかります（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。右の一覧の行を押すと、地図がそこへ飛びます。</p>`);
       parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。「地区外」「別図」は隣の地図を指す印なので数えていません。</div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="4">次へ：木を判定する</button></div>`);
+      showListTab("hits");
       break;
     }
     case 4:
       parts.push(renderJudgeStep(state));
       break;
     case 5: {
-      const low = [...state.judgments.values()].filter((j) => j.conf === "低");
+      const lows = checkList(state);
       const reviewed = [...state.judgments.values()].filter((j) => j.before);
-      parts.push(`<p>現地で確かめる所：<b>${low.length}</b> 区切り（確信が低いもの）。${reviewed.length ? `見直したのは ${reviewed.length} 区切り。` : ""}</p>`);
-      parts.push(`<div class="actions"><button class="btn" data-next-low ${low.length ? "" : "disabled"}>次の「確かめる所」へ</button><button class="btn primary" data-go="6">次へ：KP</button></div>`);
+      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b> 区切り。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
+      const pos = state.lowCursor >= 0 && state.lowCursor < lows.length ? `${state.lowCursor + 1} / ${lows.length}` : `— / ${lows.length}`;
+      parts.push(`<div class="nav"><button class="btn" data-prev-low ${lows.length ? "" : "disabled"}>← 前</button><span class="pos">${pos}</span><button class="btn" data-next-low ${lows.length ? "" : "disabled"}>次 →</button></div>`);
+      parts.push(`<div class="actions"><button class="btn primary" data-go="6">次へ：KP</button></div>`);
+      showListTab("checks");
       break;
     }
     case 6:
@@ -141,7 +157,8 @@ function renderStep(state: AppState) {
       renderStep(state);
     }),
   );
-  body.querySelector("[data-next-low]")?.addEventListener("click", () => nextLow(state));
+  body.querySelector("[data-next-low]")?.addEventListener("click", () => stepLow(state, 1));
+  body.querySelector("[data-prev-low]")?.addEventListener("click", () => stepLow(state, -1));
   body.querySelector("[data-judge]")?.addEventListener("click", () => runJudging(state));
   body.querySelector("[data-cancel]")?.addEventListener("click", () => {
     if (state.run) state.run.cancel = true;
@@ -162,7 +179,9 @@ function renderJudgeStep(state: AppState): string {
   const byClaude = [...state.judgments.values()].filter((j) => j.by === "Claude").length;
   const hasKey = !!getApiKey();
   const parts: string[] = [];
-  parts.push(`<p>区切りは <b>${state.segments.length}</b>（${windows.length} 窓）。判定済み <b>${judged}</b>${byClaude ? `、うち Claude が ${byClaude}` : ""}。</p>`);
+  const byHuman = judged - byClaude;
+  parts.push(`<p>区切り ${help(HELP.segment)} は <b>${state.segments.length}</b>。判定が付いているのは <b>${judged}</b> ${help(HELP.judged)}（Claude ${byClaude}・人 ${byHuman}）。</p>`);
+  parts.push(`<p class="small muted">判定は、区切り 40 ほどをまとめた写真 1 枚ずつ（${windows.length} 枚）を Claude に見せて進めます。</p>`);
   if (state.run) {
     const r = state.run;
     parts.push(`<div class="progress"><i style="width:${(100 * r.done) / r.total}%"></i></div>`);
@@ -174,7 +193,7 @@ function renderJudgeStep(state: AppState): string {
     parts.push(
       `<div class="actions"><button class="btn primary" data-judge ${hasKey ? "" : "disabled"}>${judged ? "全部を判定し直す" : "木を判定する"} <span class="cost">約 ${fmtUsd(usd)}</span></button>` +
         (hasKey
-          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します` : "はそのまま残します"}。送るのは航空写真の切り抜きだけです。</p>`
+          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。送るのは航空写真の切り抜きだけです。</p>`
           : `<p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります。</p>`) +
         `</div>`,
     );
@@ -252,6 +271,7 @@ function refreshJudgments(state: AppState) {
   state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments);
   (state.map.getSource("segments") as GeoJSONSource | undefined)?.setData(state.segmentsGeo);
   renderList(state);
+  renderChecks(state);
   saveJudgments(state);
   if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
 }
@@ -278,12 +298,47 @@ function countKinds(state: AppState): string {
   return [...c.entries()].map(([k, n]) => `${k} ${n}`).join("・");
 }
 
-let lowCursor = -1;
-function nextLow(state: AppState) {
-  const lows = [...state.judgments.values()].filter((j) => j.conf === "低").sort((a, b) => a.segmentId.localeCompare(b.segmentId));
+/** 確かめる所＝確信「低」の区切り。起点から順、同じ所は左→右 */
+function checkList(state: AppState): Judgment[] {
+  const order = new Map(state.segments.map((s, i) => [s.id, i]));
+  return [...state.judgments.values()].filter((j) => j.conf === "低").sort((a, b) => (order.get(a.segmentId) ?? 0) - (order.get(b.segmentId) ?? 0));
+}
+
+function stepLow(state: AppState, dir: 1 | -1) {
+  const lows = checkList(state);
   if (!lows.length) return;
-  lowCursor = (lowCursor + 1) % lows.length;
-  selectSegment(state, lows[lowCursor].segmentId, true);
+  state.lowCursor = (state.lowCursor + dir + lows.length) % lows.length;
+  selectSegment(state, lows[state.lowCursor].segmentId, true);
+  if (state.step === 5) renderStep(state);
+}
+
+/** 「確かめる所」の一覧。行を押すとそこへ飛び、何番目かが手順 5 の表示と合う */
+function renderChecks(state: AppState) {
+  const lows = checkList(state);
+  document.getElementById("check-count")!.textContent = `${lows.length}`;
+  const body = document.getElementById("check-body")!;
+  if (!lows.length) {
+    body.innerHTML = `<p class="empty">まだありません。手順 4 で判定すると、確信が「低」だった区切りがここに並びます。</p>`;
+    return;
+  }
+  const rows = lows
+    .map((j, i) => {
+      const seg = state.segments.find((s) => s.id === j.segmentId);
+      const side = j.segmentId.startsWith("L") ? "左" : "右";
+      return `<tr data-seg="${j.segmentId}" class="${j.segmentId === state.selectedSegment ? "selected" : ""}">
+        <td class="num">${i + 1}</td><td class="num">${seg ? `${seg.fromM}〜${seg.toM}` : ""}</td><td>${side}</td>
+        <td class="num">${j.tree}%</td><td>${j.before ? '<span class="badge">見直し済</span>' : ""}</td>
+        <td class="muted" title="${escapeHtml(j.why)}">${escapeHtml(j.why.length > 18 ? j.why.slice(0, 18) + "…" : j.why)}</td></tr>`;
+    })
+    .join("");
+  body.innerHTML = `<table class="list"><thead><tr><th>#</th><th>起点から m</th><th>左右</th><th>木</th><th></th><th>理由</th></tr></thead><tbody>${rows}</tbody></table>`;
+  body.querySelectorAll<HTMLTableRowElement>("tr[data-seg]").forEach((tr, i) =>
+    tr.addEventListener("click", () => {
+      state.lowCursor = i;
+      selectSegment(state, tr.dataset.seg!, true);
+      if (state.step === 5) renderStep(state);
+    }),
+  );
 }
 
 /* ---------- 地図の操作 ---------- */
@@ -310,6 +365,7 @@ function clearSelection(state: AppState) {
   state.selectedParcel = state.selectedSegment = null;
   document.querySelectorAll("table.list tr.selected").forEach((tr) => tr.classList.remove("selected"));
 }
+
 
 /** パネルに隠れていない範囲の真ん中に来るよう、余白を付けて飛ぶ */
 function flyTo(state: AppState, bounds: LngLatBoundsLike) {
@@ -356,6 +412,9 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
   if (!f) return;
   state.selectedSegment = id;
   state.map.setFeatureState({ source: "segments", id }, { selected: true });
+  const row = document.querySelector(`#check-body tr[data-seg="${CSS.escape(id)}"]`);
+  row?.classList.add("selected");
+  row?.scrollIntoView({ block: "nearest" });
   const j = state.judgments.get(id);
   const side = f.properties!.side === "L" ? "左" : "右";
   const confClass = j?.conf === "低" ? "low" : j?.conf === "高" ? "high" : "";
