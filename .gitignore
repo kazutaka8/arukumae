@@ -1,31 +1,130 @@
-# 鍵。公開リポジトリなので、見本は .example にして実物は入れない
+# 公開リポジトリ。「いま無いから書かない」ではなく、今後うっかり置きそうなものも先に書いておく。
+# 入れてよいか迷うものは data/README.md（出典）か docs/spec.md（§8.7 送らないもの）を見る。
+
+# ---- 鍵・資格情報（.example だけ入れる。実物は .example にも書かない） ----
 .env
 .env.*
 !.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+key.properties
+*.secret
+*secret*.json
+*credential*.json
+*service-account*.json
+*token*.txt
+.netrc
+.npmrc
+.pypirc
+*.keychain
+*.keychain-db
+secrets/
+**/secrets/
 
-# 大きな元データ（公図の zip など）。取り方は data/README.md
+# ---- 大きな元データ・実案件のデータ（取り方は data/README.md） ----
+# 公図の zip、実在の輸送計画の軌跡図、荷主・元請の資料の類は、どの階層でも private/ か raw/ に置く
 data/raw/
+**/raw/
+private/
+**/private/
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.aab
+*.apk
+*.ipa
 
-# レビューの記録は手元だけ
-.codex-review/
+# ---- 試しで取った地理院タイルの写し（出典のあるデータなので、そのままは配らない） ----
+**/tiles/
+*.mbtiles
+*.pmtiles
 
-# macOS
-.DS_Store
+# ---- 動画・写真の素材（大きい。デモ動画は動画サイトに置き、リポジトリには入れない） ----
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.heic
+*.psd
+*.sketch
+docs/demo/raw/
+docs/demo/out/
+remotion/out/
+**/screenshots-raw/
 
-# Python
-__pycache__/
-*.pyc
-.venv/
+# ---- 道具の出力（案件ファイル・一覧表・買うリスト・現地マップ・持って歩く地図。実在の地番・軌跡の座標・現地のメモが入る） ----
+# 道具が書くファイルは全部 arukumae_ で始まる（project.ts・main.ts の download）。保存先に作業フォルダを選んで git add . しても入らないように
+arukumae_*
+/out/
+/exports/
+app/out/
+app/exports/
 
-# 試しで取った地理院タイルの写し（出典のあるデータなので、そのままは配らない）
-experiments/case_c/tiles/
-experiments/case_a/tiles/
-
-# MapLibre の Worker の写し（scripts/copy-worker.mjs が作る）
+# ---- ビルド・依存・キャッシュ ----
+node_modules/
+dist/
+dist-site/
+.vite/
+.cache/
+.parcel-cache/
+coverage/
+*.tsbuildinfo
+.eslintcache
 app/public/vendor/
 
-# ビルドの出力
-app/dist/
-app/node_modules/
-# ビルドの出力を /arukumae/ の下で試すための置き場（launch.json の arukumae-dist）
-app/dist-site/
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.ipynb_checkpoints/
+
+# ---- Claude Code・Codex の手元の記録（launch.json と codex-review.json は入れる） ----
+.claude/settings.local.json
+.claude/*.local.json
+.claude/*.local.md
+.claude/scratch/
+.claude/worktrees/
+CLAUDE.local.md
+AGENTS.local.md
+*.local.md
+.codex/
+.codex-review/
+.cursor/
+.aider*
+
+# ---- ログ・一時ファイル ----
+*.log
+# 試しの記録（experiments/*/out/）のログは残す。鍵は出していない（run.py はキーチェーンから読む）
+!experiments/*/out/*.log
+npm-debug.log*
+yarn-error.log*
+*.tmp
+*.bak
+*.orig
+*.swp
+*~
+tmp/
+temp/
+
+# ---- OS・エディタ ----
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
