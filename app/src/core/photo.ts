@@ -7,8 +7,8 @@
 import type { Segment } from "./geom";
 import { toLonLat } from "./proj";
 
-const Z = 18;
-const TILE = 256;
+export const Z = 18;
+export const TILE = 256;
 const SCALE = 3;
 const PAD_M = 15;
 const TILE_URL = (z: number, x: number, y: number) => `https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/${z}/${x}/${y}.jpg`;
@@ -22,7 +22,7 @@ export interface WindowImages {
   height: number;
 }
 
-function lonLatToPx(lon: number, lat: number, z = Z): [number, number] {
+export function lonLatToPx(lon: number, lat: number, z = Z): [number, number] {
   const n = 2 ** z * TILE;
   const x = ((lon + 180) / 360) * n;
   const y = ((1 - Math.asinh(Math.tan((lat * Math.PI) / 180)) / Math.PI) / 2) * n;
@@ -30,14 +30,14 @@ function lonLatToPx(lon: number, lat: number, z = Z): [number, number] {
 }
 
 /** 1画素が何 m か（その緯度で） */
-function metersPerPx(lat: number, z = Z): number {
+export function metersPerPx(lat: number, z = Z): number {
   return (40_075_016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * TILE);
 }
 
 // タイルの写しはページを開いている間だけ持つ。同じ窓を判定し直すときに、もう一度取りに行かないため
 const tileCache = new Map<string, Promise<ImageBitmap | null>>();
 
-function fetchTile(z: number, x: number, y: number): Promise<ImageBitmap | null> {
+export function fetchTile(z: number, x: number, y: number): Promise<ImageBitmap | null> {
   const key = `${z}/${x}/${y}`;
   let p = tileCache.get(key);
   if (!p) {

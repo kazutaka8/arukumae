@@ -15,6 +15,7 @@ import { toLonLat, toPlane, type EN } from "./core/proj";
 import { linesToPlane, parseTrackFile, trackGeoJSON, trackKml } from "./core/track";
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
+import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
@@ -52,6 +53,9 @@ interface AppState {
   placingTilt: { fromM: number | null } | null;
   /** 判定の進み具合。null なら動いていない */
   run: { done: number; total: number; usd: number; log: string[]; cancel: boolean } | null;
+  /** PDF を描いている最中の進み具合 */
+  pdfRun: { done: number; total: number } | null;
+  pdfError: string | null;
 }
 
 // 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
@@ -106,10 +110,12 @@ async function main() {
     placingKp: false,
     placingTilt: null,
     run: null,
+    pdfRun: null,
+    pdfError: null,
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
-  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now() };
+  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput };
 
   map.on("load", () => {
     addParcels(map, parcelsFc, hitsToGeoJSON(hits));
@@ -136,6 +142,7 @@ const HELP = {
   check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
+  walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」の表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
   tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
@@ -211,8 +218,16 @@ function renderStep(state: AppState) {
       const noKp = state.kps.length < 2;
       const judged = state.judgments.size;
       parts.push(`<p>かかる筆 <b>${state.hits.length}</b> 行の一覧表です。${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りが ${state.segments.length - judged} あり、その分の木の面積は数えません。` : ""}</p>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button><button class="btn" disabled>持って歩く地図（PDF）— まだ</button></div>`);
+      parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button></div>`);
       parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・決めたのは・備考。森林の区域と届出の目印の列は、あとで足します。</p>`);
+      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">持って歩く地図（PDF） ${help(HELP.walkmap)}</h4>`);
+      if (state.pdfRun) {
+        parts.push(`<div class="progress"><i style="width:${(100 * state.pdfRun.done) / state.pdfRun.total}%"></i></div><p class="small">${state.pdfRun.done} / ${state.pdfRun.total} ページを描いています…</p>`);
+      } else {
+        parts.push(`<div class="actions"><button class="btn primary" data-pdf>持って歩く地図を書き出す（PDF、A4 ${pagesOf(state.segments).length + 1} ページ）</button></div>`);
+        parts.push(`<label class="row" style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" data-pdf-photo checked> 背景に航空写真を入れる（外すと線と色だけ）</label>`);
+        if (state.pdfError) parts.push(`<p class="small" style="color:#c62828">${escapeHtml(state.pdfError)}</p>`);
+      }
       showListTab("hits");
       break;
     }
@@ -244,6 +259,10 @@ function renderStep(state: AppState) {
     const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
+  });
+  body.querySelector("[data-pdf]")?.addEventListener("click", () => {
+    const withPhoto = (body.querySelector("[data-pdf-photo]") as HTMLInputElement | null)?.checked ?? true;
+    exportWalkMap(state, withPhoto);
   });
   body.querySelector("[data-prev-low]")?.addEventListener("click", () => stepLow(state, -1));
   body.querySelector("[data-judge]")?.addEventListener("click", () => runJudging(state));
@@ -1002,6 +1021,55 @@ function renderList(state: AppState) {
   document.querySelectorAll<HTMLTableRowElement>("table.list tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => selectParcel(state, tr.dataset.id!, true)),
   );
+}
+
+/* ---------- 持って歩く地図（F8） ---------- */
+
+function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
+  const vehicleZones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones : [];
+  const band = state.track.source.kind === "band";
+  return {
+    title: document.getElementById("project-name")?.textContent ?? state.roadName,
+    roadName: state.roadName,
+    dense: state.dense,
+    normals: state.normals,
+    segments: state.segments,
+    parcels: state.parcels,
+    hits: state.hits,
+    judgments: state.judgments,
+    kps: state.kps,
+    sweep: band ? null : state.trackResult.sweep,
+    outer: band ? null : state.trackResult.outer,
+    tiltZones: vehicleZones,
+    trackText: describeTrack(state.track),
+    withPhoto,
+  };
+}
+
+async function exportWalkMap(state: AppState, withPhoto: boolean) {
+  if (state.pdfRun) return;
+  state.pdfError = null;
+  state.pdfRun = { done: 0, total: pagesOf(state.segments).length + 1 };
+  renderStep(state);
+  try {
+    const blob = await buildWalkMap(walkMapInput(state, withPhoto), (done, total) => {
+      state.pdfRun = { done, total };
+      if (state.step === 7) renderStep(state);
+    });
+    const day = new Date().toISOString().slice(0, 10);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `arukumae_${state.roadName}_持って歩く地図_${day}.pdf`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    console.info(`PDF ${Math.round(blob.size / 1024)} KB`);
+  } catch (e) {
+    state.pdfError = `PDF を作れませんでした：${(e as Error).message}`;
+    console.error(e);
+  } finally {
+    state.pdfRun = null;
+    if (state.step === 7) renderStep(state);
+  }
 }
 
 /* ---------- 凡例と表示の切り替え ---------- */
