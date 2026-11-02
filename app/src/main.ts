@@ -12,7 +12,7 @@ import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } f
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
 import { renderWindow, windowsOf } from "./core/photo";
 import { toLonLat, toPlane, type EN } from "./core/proj";
-import { linesToPlane, parseTrackFile, trackGeoJSON, trackKml } from "./core/track";
+import { linesToPlane, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
@@ -215,7 +215,7 @@ function renderStep(state: AppState) {
   switch (state.step) {
     case 1:
       parts.push(`<dl class="kv"><dt>案件名</dt><dd>小川村 県道401号（見本）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${state.dense.length - 1} m</dd><dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`);
-      parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。見本では公図は取り込み済みで、軌跡図は車両の寸法から架空のものを作っています。</div>`);
+      parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。公図は法務省の地図XML の zip をそのまま落とせます（見本では取り込み済み）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
       break;
     case 2:
@@ -393,8 +393,8 @@ function renderTrackStep(state: AppState): string {
     parts.push(`</details>`);
     if (preset === "lifter") parts.push(renderTiltZones(state, t.source.tiltZones));
   } else if (t.source.kind === "file") {
-    parts.push(`<div class="dropzone" data-drop>ここに軌跡図（KML・GeoJSON）を落とす<br><input type="file" accept=".kml,.geojson,.json" data-track-file></div>`);
-    parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。外側線・内側線・多角形のどれでも構いません。座標はこの端末の外へ出しません。KMZ は解凍して中の KML を。</p>`);
+    parts.push(`<div class="dropzone" data-drop>ここに軌跡図（KML・KMZ・GeoJSON）を落とす<br><input type="file" accept=".kml,.kmz,.geojson,.json" data-track-file></div>`);
+    parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。外側線・内側線・多角形のどれでも構いません。座標はこの端末の外へ出しません。</p>`);
     if (t.source.lines.length) parts.push(`<p>読んだ：<b>${escapeHtml(t.source.name)}</b>（線 ${t.source.lines.length} 本）</p>`);
   } else {
     parts.push(numField("halfWidth", "中心線から外側まで", t.source.halfWidth, "m", 1, 3, 60));
@@ -606,8 +606,7 @@ function placeTilt(state: AppState, lonLat: [number, number]) {
 
 async function readTrackFile(state: AppState, f: File) {
   try {
-    const text = await f.text();
-    const lines = parseTrackFile(f.name, text);
+    const lines = parseTrackBytes(f.name, new Uint8Array(await f.arrayBuffer()));
     if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
     state.track = { ...state.track, source: { kind: "file", name: f.name, lines: linesToPlane(lines) } };
     state.trackError = null;

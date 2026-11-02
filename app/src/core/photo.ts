@@ -11,6 +11,8 @@ export const Z = 18;
 export const TILE = 256;
 const SCALE = 3;
 const PAD_M = 15;
+/** 番号の札を、枠の道路側の縁から道路へ何 m 入れて置くか（道路の半幅 3m の半分） */
+const LABEL_IN_M = 1.5;
 const TILE_URL = (z: number, x: number, y: number) => `https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/${z}/${x}/${y}.jpg`;
 
 export interface WindowImages {
@@ -95,19 +97,37 @@ export async function renderWindow(segs: Segment[]): Promise<WindowImages> {
     ctx.closePath();
     ctx.stroke();
   });
-  ctx.font = "bold 15px sans-serif";
+  // 番号の札は枠の中ではなく、道路の側（枠の内側の縁から道路へ 1.5m）に、道に沿って回して置く。
+  // 枠の中に置くと細い区切りの地面を隠す。道路の上なら判定の対象ではないので隠れても困らない（2026-11-03）。
+  // 外周は「内側の縁（道路側）→ 外側の縁（逆順）」の順（geom.ts の build）なので、前半が道路側
+  ctx.font = "bold 14px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineJoin = "round";
+  const roadPx = (LABEL_IN_M / metersPerPx(lat)) * SCALE;
   segs.forEach((s, i) => {
     const pts = rings[i].slice(0, -1).map(px);
-    const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
-    const cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
-    ctx.lineWidth = 6;
+    const n = Math.floor(pts.length / 2);
+    const innerMid = pts[Math.floor(n / 2)];
+    const outerMid = pts[pts.length - 1 - Math.floor(n / 2)];
+    const dx = innerMid[0] - outerMid[0];
+    const dy = innerMid[1] - outerMid[1];
+    const d = Math.hypot(dx, dy) || 1;
+    const cx = innerMid[0] + (dx / d) * roadPx;
+    const cy = innerMid[1] + (dy / d) * roadPx;
+    // 道の向きに合わせて回す。逆さまにならないよう ±90° に収める
+    let angle = Math.atan2(pts[n - 1][1] - pts[0][1], pts[n - 1][0] - pts[0][0]);
+    if (angle > Math.PI / 2) angle -= Math.PI;
+    if (angle < -Math.PI / 2) angle += Math.PI;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.lineWidth = 5;
     ctx.strokeStyle = "black";
-    ctx.strokeText(s.id, cx, cy);
+    ctx.strokeText(s.id, 0, 0);
     ctx.fillStyle = "white";
-    ctx.fillText(s.id, cx, cy);
+    ctx.fillText(s.id, 0, 0);
+    ctx.restore();
   });
   const labeled = toJpeg(canvas);
   return { ids: segs.map((s) => s.id), plain, labeled, width: w, height: h };

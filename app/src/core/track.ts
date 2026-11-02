@@ -7,6 +7,7 @@
  *   本物の軌跡図は発注者のまだ公表していない計画であることがある。読んだ座標はこの端末の外へ出さない（spec §8.7）。
  * 書く：架空の軌跡図を KML と GeoJSON にする。運送会社の軌跡図が届く前の打ち合わせや、ほかの地図ソフトで重ねるため。
  */
+import { strFromU8, unzipSync } from "fflate";
 import type { Feature, FeatureCollection, LineString, Polygon, Position } from "geojson";
 import { resample, StationIndex } from "./geom";
 import { toLonLat, toPlane, type EN } from "./proj";
@@ -19,10 +20,23 @@ export type LonLat = [number, number];
 /** KML か GeoJSON の文字列から、線と多角形の縁（緯度経度の点列）を全部取り出す。点（Point）は使わない */
 export function parseTrackFile(name: string, text: string): LonLat[][] {
   const trimmed = text.trimStart();
-  if (trimmed.startsWith("PK")) throw new Error("KMZ はまだ読めません。解凍して中の KML を落としてください");
+  if (trimmed.startsWith("PK")) throw new Error(`${name} は zip（KMZ）のようです。parseTrackBytes で読んでください`);
   if (trimmed.startsWith("{")) return linesFromGeoJSON(JSON.parse(text));
   if (trimmed.startsWith("<")) return linesFromKml(text);
   throw new Error(`${name} は KML でも GeoJSON でもないようです`);
+}
+
+/**
+ * ファイルのバイト列から読む。KMZ（zip の中に doc.kml などの KML が 1 つ入ったもの。Google Earth の既定の保存形）なら解凍して中の KML を読む。
+ * 中の画像などは使わない
+ */
+export function parseTrackBytes(name: string, bytes: Uint8Array): LonLat[][] {
+  const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+  if (!isZip) return parseTrackFile(name, new TextDecoder("utf-8").decode(bytes));
+  const entries = unzipSync(bytes, { filter: (f) => f.name.toLowerCase().endsWith(".kml") });
+  const names = Object.keys(entries).sort((a, b) => (a.toLowerCase() === "doc.kml" ? -1 : b.toLowerCase() === "doc.kml" ? 1 : a.localeCompare(b)));
+  if (!names.length) throw new Error(`${name} の中に KML がありません`);
+  return parseTrackFile(names[0], strFromU8(entries[names[0]]));
 }
 
 function linesFromKml(xml: string): LonLat[][] {

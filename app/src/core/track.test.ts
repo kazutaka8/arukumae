@@ -1,7 +1,8 @@
+import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { leftNormals, resample } from "./geom";
 import type { EN } from "./proj";
-import { linesToPlane, parseTrackFile, sweepFromLines, trackGeoJSON, trackKml } from "./track";
+import { linesToPlane, parseTrackBytes, parseTrackFile, sweepFromLines, trackGeoJSON, trackKml } from "./track";
 import { PRESETS, sweepVehicle } from "./vehicle";
 
 /** 平面直角座標 VIII 系で、見本の区間に近い所（長野県小川村のあたり）に置いた線。緯度経度への換算が正しく働く範囲で試すため */
@@ -68,8 +69,12 @@ describe("軌跡図の書き出しと読み込み", () => {
     expect(Number.isNaN(sw.left[200])).toBe(true);
   });
 
-  it("KMZ や知らない形式は分かる言葉で断る", () => {
-    expect(() => parseTrackFile("a.kmz", "PK\u0003\u0004...")).toThrow(/KMZ/);
+  it("KMZ は解凍して中の KML を読む。KML が入っていなければ、知らない形式と同じく分かる言葉で断る", () => {
+    const kml = `<kml><Document><Placemark><LineString><coordinates>137.9,36.6,0 137.901,36.6,0</coordinates></LineString></Placemark></Document></kml>`;
+    const kmz = zipSync({ "doc.kml": strToU8(kml), "images/a.png": new Uint8Array([1, 2, 3]) });
+    expect(parseTrackBytes("a.kmz", kmz)).toEqual([[[137.9, 36.6], [137.901, 36.6]]]);
+    expect(parseTrackBytes("b.kml", strToU8(kml))).toEqual([[[137.9, 36.6], [137.901, 36.6]]]);
+    expect(() => parseTrackBytes("c.kmz", zipSync({ "a.txt": strToU8("x") }))).toThrow(/KML がありません/);
     expect(() => parseTrackFile("a.txt", "hello")).toThrow(/KML でも GeoJSON でも/);
   });
 });
