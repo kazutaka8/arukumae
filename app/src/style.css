@@ -1,0 +1,171 @@
+/* 画面の割り付け（spec §6）。地図を画面いっぱいに出し、パネルはその上に重ねる */
+:root {
+  --bg: #ffffff;
+  --panel: rgba(255, 255, 255, 0.96);
+  --ink: #1f2933;
+  --muted: #6b7a89;
+  --line: #d9dee3;
+  --accent: #c62828; /* ロゴの赤に合わせる */
+  --accent-soft: #fdecea;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  --topbar-h: 44px;
+  --radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; height: 100%; background: var(--bg); }
+
+.topbar {
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.brand { font-weight: 700; letter-spacing: 0.04em; }
+.brand::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-right: 8px; vertical-align: -1px; }
+.project { color: var(--muted); }
+.spacer { flex: 1; }
+.save-state { color: var(--muted); font-size: 12px; }
+
+.main { position: relative; height: calc(100% - var(--topbar-h)); }
+/* MapLibre の CSS（.maplibregl-map）が position: relative を当てるので、指定の強さを上げて勝たせる */
+.main > .map { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* ボタン */
+.btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.ghost { background: transparent; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn .cost { color: inherit; opacity: 0.8; font-size: 12px; margin-left: 4px; }
+.icon-btn { border: 0; background: transparent; font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 8px; color: var(--ink); }
+
+/* パネル共通 */
+.panel {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 300px;
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  overflow: hidden;
+  z-index: 3; /* 地図の操作ボタン・出典（z-index 2）より手前 */
+}
+.panel.steps { left: 10px; }
+.panel.detail { right: 10px; width: 320px; bottom: auto; max-height: calc(100% - 20px); }
+.panel.collapsed.steps { transform: translateX(calc(-100% - 20px)); opacity: 0; pointer-events: none; }
+.panel.collapsed.detail { transform: translateX(calc(100% + 20px)); opacity: 0; pointer-events: none; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.panel-body { padding: 12px 14px; overflow: auto; }
+
+/* 手順 */
+.step-list { list-style: none; margin: 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.step-list li { display: flex; align-items: center; gap: 10px; padding: 6px 14px; cursor: pointer; color: var(--muted); }
+.step-list li:hover { background: #f3f5f7; }
+.step-list li .num { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+.step-list li.done { color: var(--ink); }
+.step-list li.done .num { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
+.step-list li.current { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
+.step-list li.current .num { background: var(--accent); border-color: var(--accent); color: #fff; }
+.step-body { padding: 12px 14px; overflow: auto; }
+.step-body h3 { margin: 0 0 6px; font-size: 15px; }
+.step-body p { margin: 0 0 10px; line-height: 1.6; }
+.step-body .next { background: #fff8e1; border-left: 3px solid #f9a825; padding: 8px 10px; margin: 10px 0; border-radius: 4px; }
+.step-body .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.step-body .actions .btn { text-align: left; }
+.dropzone { border: 2px dashed var(--line); border-radius: var(--radius); padding: 16px; text-align: center; color: var(--muted); margin-top: 8px; }
+.dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
+
+/* 詳細 */
+.kv { display: grid; grid-template-columns: 7em 1fr; gap: 4px 10px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #eceff1; }
+.badge.low { background: #fff3e0; color: #e65100; }
+.badge.high { background: #e8f5e9; color: #2e7d32; }
+.badge.human { background: #e3f2fd; color: #1565c0; }
+
+/* 一覧（下の引き出し） */
+.drawer {
+  position: absolute;
+  left: 320px;
+  right: 340px;
+  bottom: 0;
+  height: 40%;
+  background: var(--panel);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.2s ease;
+  z-index: 3;
+}
+.drawer.collapsed { transform: translateY(calc(100% - 36px)); }
+.drawer-handle { height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 14px; cursor: pointer; font-weight: 600; border-bottom: 1px solid var(--line); }
+.drawer-handle .chev { margin-left: auto; transition: transform 0.2s; }
+.drawer:not(.collapsed) .drawer-handle .chev { transform: rotate(180deg); }
+.drawer-body { overflow: auto; flex: 1; }
+table.list { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.list th, table.list td { padding: 5px 10px; border-bottom: 1px solid #eef1f3; text-align: left; white-space: nowrap; }
+table.list th { position: sticky; top: 0; background: #fafbfc; color: var(--muted); font-weight: 600; }
+table.list tr { cursor: pointer; }
+table.list tr:hover td { background: #f3f5f7; }
+table.list tr.selected td { background: var(--accent-soft); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* 凡例 */
+.legend {
+  position: absolute;
+  right: 10px;
+  bottom: 48px; /* 縮尺と出典の表示の上 */
+  background: var(--panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  width: 230px;
+  font-size: 12px;
+  z-index: 2;
+}
+.legend.collapsed .legend-body { display: none; }
+.legend-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 6px 6px 12px; font-weight: 600; }
+.legend-body { padding: 0 12px 10px; }
+.legend-body label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+.legend-body .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.25); flex: none; }
+.legend-body .sub { margin: 4px 0 2px 22px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); }
+.legend-body .sub span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* 設定の窓 */
+.dialog { border: 0; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; width: 420px; max-width: 95vw; }
+.dialog::backdrop { background: rgba(0,0,0,0.3); }
+.dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.dialog label { display: block; margin: 10px 0; font-weight: 600; }
+.dialog label input[type="password"], .dialog label select { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; font-weight: 400; }
+.dialog label.row { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.row.end { display: flex; justify-content: flex-end; }
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+
+/* 手順のパネルが開いていても地図の操作がしやすいよう、地図の操作ボタンは右上のまま */
+.maplibregl-ctrl-top-right { top: 10px; right: 340px; transition: right 0.2s; }
+.detail.collapsed ~ .maplibregl-ctrl-top-right { right: 10px; }
+
+@media (max-width: 1100px) {
+  .drawer { left: 10px; right: 10px; }
+}
