@@ -129,7 +129,7 @@ function toLonLatShape(pieces: Feature<Polygon | MultiPolygon>[]): MultiPolygon 
   };
 }
 
-function planeArea(f: Feature<Polygon | MultiPolygon>): number {
+export function planeArea(f: Feature<Polygon | MultiPolygon>): number {
   const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
   let total = 0;
   for (const rings of polys) {

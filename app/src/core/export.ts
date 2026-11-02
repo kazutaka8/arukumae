@@ -1,8 +1,9 @@
 /**
  * 一覧表（F7、spec §9.1）。1筆1行。筆が複数の区切りにまたがるときは集計する。
  * CSV は UTF-8 に BOM を付けて出す。Excel がそのまま日本語を読めるように（BOM がないと Shift_JIS と見なして化ける）。
- * 森林の区域と届出の目印の列は、林野庁のタイルを読む仕組みができてから足す。
+ * 森林の区域と届出の目印は、林野庁のタイルから筆ごとに出したもの（forest.ts）。まだ読めていなければ空にする
  */
+import { forestText, noticeText, type ForestInfo } from "./forest";
 import { estimateKp, formatKp, type KpMark } from "./kp";
 import type { Judgment, ParcelHit, ParcelProps } from "./types";
 
@@ -21,12 +22,14 @@ export interface ListRow {
   確信: string;
   現地で確かめる所: string;
   決めたのは: string;
+  森林の区域: string;
+  伐採の届出の目印: string;
   備考: string;
 }
 
 export const COLUMNS: (keyof ListRow)[] = [
   "起点からの距離", "左右", "道路名とKP", "KPの根拠", "所在", "地番", "地番の種類", "かかる面積m2",
-  "木のある面積m2", "樹種の目安", "木以外", "確信", "現地で確かめる所", "決めたのは", "備考",
+  "木のある面積m2", "樹種の目安", "木以外", "確信", "現地で確かめる所", "決めたのは", "森林の区域", "伐採の届出の目印", "備考",
 ];
 
 const CONF_ORDER = { 低: 0, 中: 1, 高: 2 } as const;
@@ -37,6 +40,7 @@ export function buildRows(
   judgments: Map<string, Judgment>,
   kps: KpMark[],
   roadName: string,
+  forest: Map<string, ForestInfo> | null = null,
 ): ListRow[] {
   return hits.map((h) => {
     const p = parcelById.get(h.parcelId)!.properties;
@@ -65,6 +69,8 @@ export function buildRows(
       確信: worst ? worst.conf : "",
       現地で確かめる所: lows.length ? lows.map((j) => `${j.segmentId}：${j.why}`).join(" ／ ") : "",
       決めたのは: js.length ? (js.some((j) => j.by === "人") ? (js.every((j) => j.by === "人") ? "人" : "人・Claude") : "Claude") : "",
+      森林の区域: forest ? forestText(forest.get(h.parcelId)) : "",
+      伐採の届出の目印: forest ? noticeText(forest.get(h.parcelId)) : "",
       備考: "",
     };
   });

@@ -38,6 +38,15 @@ describe("buildRows", () => {
     expect(r.確信).toBe("低");
     expect(r.現地で確かめる所).toBe("L034：理由 L034");
     expect(r.決めたのは).toBe("Claude");
+    expect(r.森林の区域).toBe(""); // 森林のデータをまだ読めていない
+  });
+
+  it("森林の区域を渡すと、列に言葉と届出の目印が入る", () => {
+    const forest = new Map([["m:1", { ratio: 0.8, kinds: ["民有林" as const], rinpan: ["0058"] }]]);
+    const [r] = buildRows([hit], parcels, new Map(), [], "x", forest);
+    expect(r.森林の区域).toBe("民有林（林班 0058）");
+    expect(r.伐採の届出の目印).toBe("要るかもしれない（市町村に確かめる）");
+    expect(buildRows([hit], parcels, new Map(), [], "x", new Map())[0].森林の区域).toBe("区域外"); // 読めたが重ならない
   });
 
   it("距離標が足りないときは KP を空にして理由を書く。判定がなければ木の列は空", () => {

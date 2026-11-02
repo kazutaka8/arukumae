@@ -16,6 +16,7 @@ import { fetchTile, lonLatToPx, metersPerPx, TILE, windowsOf, Z } from "./photo"
 import { toLonLat, type EN } from "./proj";
 import type { KpMark } from "./kp";
 import { estimateKp, fmtKm } from "./kp";
+import type { ForestInfo } from "./forest";
 import type { Judgment, ParcelHit } from "./types";
 import type { Sweep, TiltZone } from "./vehicle";
 
@@ -37,6 +38,8 @@ export interface WalkMapInput {
   trackText: string;
   /** 航空写真を背景に入れるか。入れないと線と色だけになる（spec §9.2） */
   withPhoto: boolean;
+  /** 森林の区域（林野庁）。読めていなければ null */
+  forest: Map<string, ForestInfo> | null;
 }
 
 // A4 縦（mm）。描く解像度は 8 px/mm（約 203 dpi）。地理院の写真（z18、約 0.48m／画素）を拡大して貼るので、これ以上細かくしても写真はよくならない
@@ -51,7 +54,7 @@ const CHECK_ROW_H = 7.5;
 
 const TREE_FILL: Record<number, string> = { 0: "rgba(255,255,255,0.25)", 25: "rgba(255,235,59,0.5)", 50: "rgba(255,152,0,0.55)", 75: "rgba(244,81,30,0.6)", 100: "rgba(183,28,28,0.65)" };
 
-const ATTRIBUTION = "出典：国土地理院（地理院タイル 全国最新写真）を加工 ／ 登記所備付地図データ 上水内郡小川村（法務省）を加工して作成 ／ © OpenStreetMap contributors";
+const ATTRIBUTION = "出典：国土地理院（地理院タイル 全国最新写真）を加工 ／ 登記所備付地図データ 上水内郡小川村（法務省）を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors";
 
 type XY = [number, number];
 
@@ -464,6 +467,9 @@ export async function renderIndexPage(input: WalkMapInput, pages: Segment[][], d
     `伐採範囲：${input.trackText}`,
     `木のある面積（推定・判定のある区切りだけ）：約 ${Math.round(treeArea)} m²　現地で確かめる所（確信が低い区切り）：${lows.length}`,
     input.kps.length >= 2 ? `KP：人が置いた距離標 ${input.kps.length} 本から中心線に沿って推定（距離標の外側は外挿）` : "KP：距離標が 2 本未満のため出していません",
+    input.forest
+      ? `森林の区域（林野庁）：民有林の区域にかかる筆 ${input.hits.filter((h) => (input.forest!.get(h.parcelId)?.ratio ?? 0) >= 0.02 && input.forest!.get(h.parcelId)!.kinds.includes("民有林")).length}（伐採の届出が要るかもしれない。要否は市町村に確かめる）`
+      : "森林の区域：読めていません",
     "使い方：ページの地図で区切りの番号を見て、下の表の○×とメモに現地の見たままを書く。帰ってから道具の「確かめて直す」に写す。",
   ];
   font(ctx, 3);

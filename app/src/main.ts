@@ -16,6 +16,7 @@ import { linesToPlane, parseTrackFile, trackGeoJSON, trackKml } from "./core/tra
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
+import { fetchForest, forestOfHits, forestText, noticeText, type ForestInfo, type ForestPolygon } from "./core/forest";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
@@ -56,6 +57,10 @@ interface AppState {
   /** PDF を描いている最中の進み具合 */
   pdfRun: { done: number; total: number } | null;
   pdfError: string | null;
+  /** 森林の区域（林野庁）。読めるまで null。読めたら筆ごとの重なり */
+  forestPolys: ForestPolygon[] | null;
+  forest: Map<string, ForestInfo> | null;
+  forestNote: string;
 }
 
 // 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
@@ -112,6 +117,9 @@ async function main() {
     run: null,
     pdfRun: null,
     pdfError: null,
+    forestPolys: null,
+    forest: null,
+    forestNote: "森林の区域を読んでいます…",
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
@@ -123,12 +131,13 @@ async function main() {
     addTrack(map, trackGeo(state));
     addSection(map, section);
     addKps(map, kpsGeo(state));
-    for (const h of hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
+    for (const h of state.hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
     wireMapClicks(state);
     renderLegend(state);
   });
 
   document.getElementById("project-name")!.textContent = `${section.features[0].properties.road_name}（見本）`;
+  loadForest(state);
   renderStep(state);
   renderList(state);
   renderChecks(state);
@@ -142,6 +151,7 @@ const HELP = {
   check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
+  forest: "森林の区域：林野庁の「森林計画対象森林レイヤ」（地域森林計画の対象の民有林と国有林の区域、林班）。筆のかかる部分がこの区域にどれだけ入るかを測り、半分未満なら「一部」と書きます。伐採の届出が要るかどうかは、登記の地目ではなく、この民有林の区域かどうかで決まるとされています（自分の理解。森林法第10条の8）。道具は目印を付けるまでで、要否は所管の市町村に確かめてください。区域の線は 1/5,000 相当で、筆の境界とはふつうずれます。",
   walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」の表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
   tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
@@ -170,6 +180,7 @@ function renderStep(state: AppState) {
     case 3: {
       const kinds = countKinds(state);
       parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲 ${help(HELP.band)} にかかります（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。右の一覧の行を押すと、地図がそこへ飛びます。</p>`);
+      parts.push(`<p>${forestSummary(state)} ${help(HELP.forest)}</p>`);
       parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。「地区外」「別図」は隣の地図を指す印なので数えていません。</div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="4">次へ：木を判定する</button></div>`);
       showListTab("hits");
@@ -219,7 +230,7 @@ function renderStep(state: AppState) {
       const judged = state.judgments.size;
       parts.push(`<p>かかる筆 <b>${state.hits.length}</b> 行の一覧表です。${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りが ${state.segments.length - judged} あり、その分の木の面積は数えません。` : ""}</p>`);
       parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button></div>`);
-      parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・決めたのは・備考。森林の区域と届出の目印の列は、あとで足します。</p>`);
+      parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・決めたのは・森林の区域・伐採の届出の目印・備考。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`);
       parts.push(`<h4 class="muted small" style="margin:12px 0 4px">持って歩く地図（PDF） ${help(HELP.walkmap)}</h4>`);
       if (state.pdfRun) {
         parts.push(`<div class="progress"><i style="width:${(100 * state.pdfRun.done) / state.pdfRun.total}%"></i></div><p class="small">${state.pdfRun.done} / ${state.pdfRun.total} ページを描いています…</p>`);
@@ -256,7 +267,7 @@ function renderStep(state: AppState) {
     }),
   );
   body.querySelector("[data-csv]")?.addEventListener("click", () => {
-    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName);
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
   });
@@ -571,10 +582,11 @@ function rebuildTrack(state: AppState) {
   state.trackResult = computeTrack(state.dense, state.normals, state.track);
   state.segments = state.trackResult.segments;
   const hits = findHits(state.parcels, state.segments);
-  for (const h of state.hits) state.map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: false });
+  for (const h of state.hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: false });
   state.hits = hits;
   state.hitById = new Map(hits.map((h) => [h.parcelId, h]));
-  for (const h of hits) state.map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
+  for (const h of hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: true });
+  if (state.forestPolys) state.forest = forestOfHits(hits, state.forestPolys);
   state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments);
   setSourceData(state.map, "segments", state.segmentsGeo);
   setSourceData(state.map, "hit-areas", hitsToGeoJSON(hits));
@@ -845,9 +857,14 @@ function loadJson<T>(key: string): T | null {
   }
 }
 
+/** 地図の読み込みが終わる前に一覧の行を押すと、源（source）がまだ無くて MapLibre が例外を投げる。そのときは色を付けないだけにする */
+function featureState(state: AppState, target: { source: string; id: string }, value: Record<string, boolean>) {
+  if (state.map.getSource(target.source)) state.map.setFeatureState(target, value);
+}
+
 function clearSelection(state: AppState) {
-  if (state.selectedParcel) state.map.setFeatureState({ source: "parcels", id: state.selectedParcel }, { selected: false });
-  if (state.selectedSegment) state.map.setFeatureState({ source: "segments", id: state.selectedSegment }, { selected: false });
+  if (state.selectedParcel) featureState(state, { source: "parcels", id: state.selectedParcel }, { selected: false });
+  if (state.selectedSegment) featureState(state, { source: "segments", id: state.selectedSegment }, { selected: false });
   state.selectedParcel = state.selectedSegment = null;
   document.querySelectorAll("table.list tr.selected").forEach((tr) => tr.classList.remove("selected"));
 }
@@ -869,7 +886,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
   const p = state.parcelById.get(id);
   if (!p) return;
   state.selectedParcel = id;
-  state.map.setFeatureState({ source: "parcels", id }, { selected: true });
+  featureState(state, { source: "parcels", id }, { selected: true });
   const h = state.hitById.get(id);
   const row = document.querySelector(`table.list tr[data-id="${CSS.escape(id)}"]`);
   row?.classList.add("selected");
@@ -885,6 +902,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
       ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
       ${h ? `<dt>木（推定）</dt><dd>${tree ? `最大 ${tree.tree}%（${tree.n} 区切り）` : '<span class="muted">まだ判定していません</span>'}</dd>` : ""}
       ${h ? `<dt>KP（推定）</dt><dd>${kpText(state, (h.fromM + h.toM) / 2)}</dd>` : ""}
+      ${h ? `<dt>森林の区域</dt><dd>${state.forest ? escapeHtml(forestText(state.forest.get(h.parcelId))) + (noticeText(state.forest.get(h.parcelId)) ? `<br><span class="badge low">届出が要るかもしれない（市町村に確かめる）</span>` : "") : `<span class="muted">${escapeHtml(state.forestNote)}</span>`} ${help(HELP.forest)}</dd>` : ""}
       <dt>地図</dt><dd>${p.properties.map}</dd>
     </dl>
     <p class="muted small" style="margin-top:10px">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p>`,
@@ -898,7 +916,7 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
   const f = state.segmentsGeo.features.find((f) => f.properties!.id === id);
   if (!f) return;
   state.selectedSegment = id;
-  state.map.setFeatureState({ source: "segments", id }, { selected: true });
+  featureState(state, { source: "segments", id }, { selected: true });
   const row = document.querySelector(`#check-body tr[data-seg="${CSS.escape(id)}"]`);
   row?.classList.add("selected");
   row?.scrollIntoView({ block: "nearest" });
@@ -1009,18 +1027,59 @@ function renderList(state: AppState) {
       const p = state.parcelById.get(h.parcelId)!;
       const t = treeOfParcel(state, h);
       const treeCell = t ? `<span class="tree-bar" title="木の割合の最大 ${t.tree}%"><i style="width:${t.tree}%"></i></span> ${t.tree}%` : `<span class="muted">—</span>`;
+      const fi = state.forest?.get(h.parcelId);
+      const forestCell = !state.forest ? `<span class="muted">…</span>` : !fi || fi.ratio < 0.02 ? `<span class="muted">外</span>` : `<span title="${escapeHtml(forestText(fi))}">${fi.ratio < 0.5 ? "一部" : fi.kinds.includes("国有林") ? "国有" : "民有"}</span>`;
       return `<tr data-id="${escapeHtml(h.parcelId)}" class="${h.parcelId === state.selectedParcel ? "selected" : ""}">
         <td class="num">${h.fromM}〜${h.toM}</td><td>${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}</td>
         <td title="${escapeHtml(p.properties.oaza ?? "")}">${escapeHtml(p.properties.chiban)}</td>
-        <td class="num">${h.areaM2}</td><td>${treeCell}</td></tr>`;
+        <td class="num">${h.areaM2}</td><td>${treeCell}</td><td>${forestCell}</td></tr>`;
     })
     .join("");
   document.getElementById("list-body")!.innerHTML = `<table class="list"><thead><tr>
-    <th>起点から m</th><th>左右</th><th>地番</th><th>かかる m²</th><th>木（推定）</th>
+    <th>起点から m</th><th>左右</th><th>地番</th><th>かかる m²</th><th>木（推定）</th><th title="森林の区域（林野庁）">森林</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
   document.querySelectorAll<HTMLTableRowElement>("table.list tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => selectParcel(state, tr.dataset.id!, true)),
   );
+}
+
+/* ---------- 森林の区域（林野庁） ---------- */
+
+/** 区間の周り（左右 300m ほど）のタイルを読み、かかる筆ごとの重なりを出す。失敗しても道具は動く（列が空になるだけ） */
+async function loadForest(state: AppState) {
+  const lls = state.dense.filter((_, i) => i % 20 === 0).map((p) => toLonLat(p));
+  const pad = 0.004; // 経度・緯度で約 300〜400m
+  const bbox: [number, number, number, number] = [Math.min(...lls.map((c) => c[0])) - pad, Math.min(...lls.map((c) => c[1])) - pad, Math.max(...lls.map((c) => c[0])) + pad, Math.max(...lls.map((c) => c[1])) + pad];
+  try {
+    const r = await fetchForest(bbox);
+    state.forestPolys = r.polygons;
+    state.forest = forestOfHits(state.hits, r.polygons);
+    const asOf = r.polygons.find((p) => p.asOf)?.asOf ?? "";
+    state.forestNote = r.failed ? `森林の区域：タイル ${r.tiles} 枚のうち ${r.failed} 枚を読めませんでした` : `森林の区域：林野庁（データ時点 ${asOf}）`;
+    console.info(`${state.forestNote}。多角形 ${r.polygons.length}`);
+  } catch (e) {
+    state.forestNote = `森林の区域を読めませんでした：${(e as Error).message}`;
+  }
+  renderList(state);
+  if (state.step === 3 || state.step === 7) renderStep(state);
+  if (state.selectedParcel) selectParcel(state, state.selectedParcel, false);
+}
+
+function forestSummary(state: AppState): string {
+  if (!state.forest) return escapeHtml(state.forestNote);
+  let minyu = 0;
+  let part = 0;
+  let koku = 0;
+  for (const h of state.hits) {
+    const fi = state.forest.get(h.parcelId);
+    if (!fi || fi.ratio < 0.02) continue;
+    if (fi.kinds.includes("国有林")) koku++;
+    if (fi.kinds.includes("民有林")) {
+      minyu++;
+      if (fi.ratio < 0.5) part++;
+    }
+  }
+  return `うち <b>${minyu} 筆</b>が森林計画の対象の民有林の区域にかかります（一部だけ ${part}${koku ? `、国有林 ${koku}` : ""}）。この筆には一覧表で「伐採の届出が要るかもしれない（市町村に確かめる）」の目印を付けます。`;
 }
 
 /* ---------- 持って歩く地図（F8） ---------- */
@@ -1043,6 +1102,7 @@ function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
     tiltZones: vehicleZones,
     trackText: describeTrack(state.track),
     withPhoto,
+    forest: state.forest,
   };
 }
 
