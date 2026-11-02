@@ -5,12 +5,13 @@
 import "./style.css";
 import type { FeatureCollection, Point, Polygon, Position } from "geojson";
 import type { LngLatBoundsLike, MapGeoJSONFeature, Map as MlMap, GeoJSONSource } from "maplibre-gl";
-import { buildRows, download, toCsv } from "./core/export";
+import { buildBuyList, buildRows, download, toBuyCsv, toCsv } from "./core/export";
+import { fieldGeoJSON, fieldKml, type FieldMapInput } from "./core/fieldkml";
 import { leftNormals, nearestOnLine, resample, type Segment } from "./core/geom";
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./core/kp";
 import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
-import { renderWindow, windowsOf } from "./core/photo";
+import { renderSegmentCrop, renderWindow, windowsOf } from "./core/photo";
 import { toLonLat, toPlane, type EN } from "./core/proj";
 import { linesToPlane, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
@@ -165,7 +166,7 @@ async function main() {
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
-  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput, importParcels };
+  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput, importParcels, fieldMapInput, selectSegment };
 
   map.on("load", () => {
     addParcels(map, parcelsToGeoJSON(parcels), hitsToGeoJSON(hits));
@@ -197,6 +198,10 @@ const HELP = {
   walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」の表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
   tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
+  buylist:
+    "公図を買うリスト：かかる筆の所在・地番だけを並べた控え。登記情報提供サービスで公図や登記事項を 1 件ずつ取るとき（1 件 360 円ほど）の、取る順と抜けの確認用。同じ所在・地番は 1 行にまとめます。「購入」「備考」の列は空で、Excel で記入する欄です。",
+  fieldmap:
+    "現地マップ：この道具の結果を KML（Google Earth など）や GeoJSON（QGIS など）で持ち出すもの。かかる筆はかかる部分の形、区切りは判定の色（白 0% → 黄 25% → 橙 50% → 赤 75〜100%）、確かめる所は赤い印。押すと所在・地番・面積・KP・判定の理由が吹き出しで出ます。航空写真は入っていません（Google Earth の写真の上に重ねます）。座標は端末の中で作るだけで、外へは送りません。",
   mojxml:
     "地図XML：法務省が無料で公開している公図の電子データ（登記所備付地図データ）の形式。G空間情報センターから市町村ごとの zip で配られ、中に地図ごとの zip と XML が入っています。公共座標系の地図はそのまま重なります。任意座標系の地図（筆の半分以上がこれ）は図面の中だけの座標なので、位置を合わせないと重なりません。この道具はまだ位置合わせに対応していないので、読み飛ばして枚数だけ伝えます。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
@@ -276,6 +281,11 @@ function renderStep(state: AppState) {
       parts.push(`<p>かかる筆 <b>${state.hits.length}</b> 行の一覧表です。${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りが ${state.segments.length - judged} あり、その分の木の面積は数えません。` : ""}</p>`);
       parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button></div>`);
       parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・決めたのは・森林の区域・伐採の届出の目印・備考。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`);
+      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">公図を買うリスト ${help(HELP.buylist)}</h4>`);
+      parts.push(`<div class="actions"><button class="btn" data-buy-csv>所在・地番のリストを書き出す（CSV）</button></div>`);
+      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">現地マップ（Google Earth など） ${help(HELP.fieldmap)}</h4>`);
+      parts.push(`<div class="row btns" style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" data-field="kml">KML で書き出す</button><button class="btn" data-field="geojson">GeoJSON で書き出す</button></div>`);
+      parts.push(`<p class="muted small">かかる筆（かかる部分の形と吹き出し）・区切り（判定の色）・現地で確かめる所の印・中心線と 100m ごとの点・距離標・伐採範囲の外側。iPad の Google Earth に入れると、現地を歩くときの地図になります。</p>`);
       parts.push(`<h4 class="muted small" style="margin:12px 0 4px">持って歩く地図（PDF） ${help(HELP.walkmap)}</h4>`);
       if (state.pdfRun) {
         parts.push(`<div class="progress"><i style="width:${(100 * state.pdfRun.done) / state.pdfRun.total}%"></i></div><p class="small">${state.pdfRun.done} / ${state.pdfRun.total} ページを描いています…</p>`);
@@ -316,6 +326,19 @@ function renderStep(state: AppState) {
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
   });
+  body.querySelector("[data-buy-csv]")?.addEventListener("click", () => {
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments);
+    const day = new Date().toISOString().slice(0, 10);
+    download(`arukumae_${state.roadName}_公図を買うリスト_${day}.csv`, toBuyCsv(buildBuyList(rows)));
+  });
+  body.querySelectorAll<HTMLButtonElement>("[data-field]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const day = new Date().toISOString().slice(0, 10);
+      const input = fieldMapInput(state, day);
+      if (b.dataset.field === "kml") download(`arukumae_${state.roadName}_現地マップ_${day}.kml`, fieldKml(input), "application/vnd.google-earth.kml+xml");
+      else download(`arukumae_${state.roadName}_現地マップ_${day}.geojson`, JSON.stringify(fieldGeoJSON(input)), "application/geo+json");
+    }),
+  );
   body.querySelector("[data-pdf]")?.addEventListener("click", () => {
     const withPhoto = (body.querySelector("[data-pdf-photo]") as HTMLInputElement | null)?.checked ?? true;
     exportWalkMap(state, withPhoto);
@@ -746,6 +769,27 @@ function importParcels(state: AppState, file: File) {
   worker.postMessage({ file, dense: state.dense, bufferM: PARCEL_BUFFER_M } satisfies WorkerIn);
 }
 
+/** 現地マップ（KML・GeoJSON）の材料。伐採範囲の外側は、掃く範囲があるときだけ入れる */
+function fieldMapInput(state: AppState, day: string): FieldMapInput {
+  const cutLines = trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer)
+    .features.filter((f) => f.properties.kind === "cut" && f.geometry.type === "LineString")
+    .map((f) => (f.geometry as { coordinates: Position[] }).coordinates);
+  return {
+    title: `${state.roadName} 現地マップ（アルクマエ）`,
+    roadName: state.roadName,
+    dense: state.dense,
+    hits: state.hits,
+    parcelById: state.parcelById,
+    segments: state.segmentsGeo,
+    judgments: state.judgments,
+    checks: checkList(state),
+    kps: state.kps,
+    forest: state.forest,
+    cutLines: state.track.source.kind === "band" ? [] : cutLines,
+    madeOn: day,
+  };
+}
+
 /** 筆を入れ替え、かかる筆・森林・一覧・地図を作り直す */
 function applyParcels(state: AppState, parcels: ParcelFeature[]) {
   for (const h of state.hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: false });
@@ -1124,10 +1168,32 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
           : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
       }
     </dl>
+    <div class="seg-photo" data-seg-photo><span class="muted small">Claude が見た写真を切り出しています…</span></div>
     ${fixForm(j)}`,
   );
   wireFixForm(state, id);
+  showSegmentPhoto(state, id);
   if (fly) flyTo(state, boundsOf(f.geometry.coordinates[0]));
+}
+
+/**
+ * 区切りの詳細に、判定に送ったのと同じ描き方の写真（札なし・札あり）の切り抜きを出す。
+ * 「AI が何を見て決めたか」を人が確かめられるようにするため。タイルは photo.ts が写しを持つので 2 回目からは速い
+ */
+async function showSegmentPhoto(state: AppState, id: string) {
+  const win = windowsOf(state.segments).find((w) => w.some((s) => s.id === id));
+  const box = document.querySelector<HTMLElement>("[data-seg-photo]");
+  if (!win || !box) return;
+  try {
+    const crop = await renderSegmentCrop(win, id);
+    // 待っている間に別の区切りが選ばれていたら出さない
+    if (!crop || state.selectedSegment !== id) return;
+    const target = document.querySelector<HTMLElement>("[data-seg-photo]");
+    if (!target) return;
+    target.innerHTML = `<div class="seg-photo-pair"><figure><img src="data:image/jpeg;base64,${crop.plain}" alt="札なし"><figcaption>札なし</figcaption></figure><figure><img src="data:image/jpeg;base64,${crop.labeled}" alt="札あり"><figcaption>札あり（枠と番号）</figcaption></figure></div><p class="muted small">Claude に送ったのと同じ描き方（地理院の航空写真、z18 を 3 倍）。この区切りの周り 25m を切り出したもの。出典：国土地理院（地理院タイル）を加工</p>`;
+  } catch {
+    box.innerHTML = `<span class="muted small">写真を切り出せませんでした</span>`;
+  }
 }
 
 const TREE_KINDS: TreeKind[] = ["針葉樹", "広葉樹", "混じる", "分からない", "なし"];

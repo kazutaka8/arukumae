@@ -210,3 +210,31 @@ table.list.kps { margin-top: 8px; }
 .track table.list.small { font-size: 12px; margin: 6px 0; }
 .track table.list.small th, .track table.list.small td { padding: 2px 6px; }
 .track table.list .num { text-align: right; }
+
+/* 区切りの詳細に出す、Claude が見た写真の切り抜き（札なし・札あり） */
+.seg-photo { margin: 10px 0; }
+.seg-photo-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg-photo-pair figure { margin: 0; }
+.seg-photo-pair img { width: 100%; display: block; border-radius: 4px; border: 1px solid var(--line); }
+.seg-photo-pair figcaption { font-size: 11px; color: var(--muted); text-align: center; margin-top: 2px; }
+
+/* ---------- タブレット（iPad）----------
+ * 現場では iPad が基本だった（2026-11-03 に聞いた）。横向き（1024）では手順・一覧・詳細の 3 枚で地図がほぼ隠れたので幅を詰め、
+ * 縦向き（768）では手順と一覧を下の引き出しにして、地図を上に残す */
+@media (max-width: 1100px) {
+  .panel.steps .steps-col { width: 250px; }
+  .panel.steps .list-col { width: min(var(--list-w), 28vw); }
+  .panel.detail { width: 300px; max-height: 52%; } /* 下の凡例と重ならない高さ */
+  .maplibregl-ctrl-top-right { right: 320px; }
+  .legend { width: 200px; max-height: 38%; overflow: auto; } /* 詳細（上 52%）と重ならない高さに収め、はみ出す分は中で送る */
+}
+@media (max-width: 820px) {
+  .panel.steps { left: 10px; right: 10px; top: auto; bottom: 10px; height: 46%; }
+  .panel.steps .steps-col { width: 250px; }
+  .panel.steps .list-col { width: auto; flex: 1; }
+  .panel.collapsed.steps { transform: translateY(calc(100% + 20px)); }
+  .panel.detail { width: min(320px, 60vw); max-height: 50%; }
+  .legend { left: 10px; right: auto; bottom: calc(46% + 20px); } /* 右上は詳細が占めるので左へ */
+  .maplibregl-ctrl-bottom-right { bottom: 46%; }
+  .maplibregl-ctrl-top-right { right: 10px; top: auto; bottom: calc(46% + 20px); }
+}

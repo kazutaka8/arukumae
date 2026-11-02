@@ -74,3 +74,19 @@ describe("toCsv", () => {
     expect(lines[1].split(",").length).toBeGreaterThanOrEqual(COLUMNS.length);
   });
 });
+
+describe("公図を買うリスト", () => {
+  it("所在・地番が同じ行は 1 つにまとめ、面積を足す。列は買う控えに要るものだけ", async () => {
+    const { buildBuyList, toBuyCsv, BUY_COLUMNS } = await import("./export");
+    const rows = buildRows([hit, { ...hit, areaM2: 20, fromM: 400, toM: 410 }], parcels, new Map(), [], "小川長野線");
+    const buy = buildBuyList(rows);
+    expect(buy.length).toBe(1);
+    expect(buy[0].所在).toBe("大字稲丘");
+    expect(buy[0].地番).toBe("2303-1");
+    expect(buy[0].かかる面積m2).toBe(170);
+    expect(buy[0].起点からの距離).toBe("320〜360m"); // 先に出た行の場所
+    const csv = toBuyCsv(buy);
+    expect(csv.startsWith("﻿" + BUY_COLUMNS.join(","))).toBe(true);
+    expect(csv).toContain("大字稲丘,2303-1,ふつう,320〜360m,左,,170,,,");
+  });
+});

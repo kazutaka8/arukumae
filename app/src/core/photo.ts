@@ -54,6 +54,45 @@ export function fetchTile(z: number, x: number, y: number): Promise<ImageBitmap 
 
 /** 区切りの集まりを、札なし・札ありの画像にする */
 export async function renderWindow(segs: Segment[]): Promise<WindowImages> {
+  const r = await renderWindowCanvases(segs);
+  return { ids: segs.map((s) => s.id), plain: toJpeg(r.plain), labeled: toJpeg(r.labeled), width: r.plain.width, height: r.plain.height };
+}
+
+/**
+ * 1 つの区切りの周り（pad m）を、窓の画像（札なし・札あり）から切り抜く。詳細パネルで「Claude が見たもの」を見せる用。
+ * 判定に送った画像と同じ描き方なので、札の位置や枠も同じ
+ */
+export async function renderSegmentCrop(windowSegs: Segment[], focusId: string, padM = 25): Promise<{ plain: string; labeled: string; width: number; height: number } | null> {
+  const focus = windowSegs.find((s) => s.id === focusId);
+  if (!focus) return null;
+  const r = await renderWindowCanvases(windowSegs);
+  const pts = focus.ring.map((p) => r.px(lonLatToPx(...toLonLat(p))));
+  const lat = toLonLat(focus.ring[0])[1];
+  const pad = (padM / metersPerPx(lat)) * SCALE;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of pts) {
+    minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  }
+  // 正方形に近い切り抜きにする（細長い区切りでも周りが見えるように）
+  const size = Math.max(maxX - minX, maxY - minY) + 2 * pad;
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const sx = Math.max(0, Math.round(cx - size / 2));
+  const sy = Math.max(0, Math.round(cy - size / 2));
+  const w = Math.min(r.plain.width - sx, Math.round(size));
+  const h = Math.min(r.plain.height - sy, Math.round(size));
+  const crop = (src: HTMLCanvasElement) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    c.getContext("2d")!.drawImage(src, sx, sy, w, h, 0, 0, w, h);
+    return toJpeg(c);
+  };
+  return { plain: crop(r.plain), labeled: crop(r.labeled), width: w, height: h };
+}
+
+/** 窓の 2 枚を canvas のまま返す。px は地図の画素（lonLatToPx）→ 画像の画素 */
+async function renderWindowCanvases(segs: Segment[]): Promise<{ plain: HTMLCanvasElement; labeled: HTMLCanvasElement; px: (p: [number, number]) => [number, number] }> {
   const rings = segs.map((s) => s.ring.map((p) => lonLatToPx(...toLonLat(p))));
   const lat = toLonLat(segs[0].ring[0])[1];
   const pad = PAD_M / metersPerPx(lat);
@@ -85,7 +124,11 @@ export async function renderWindow(segs: Segment[]): Promise<WindowImages> {
     }
   }
   await Promise.all(jobs);
-  const plain = toJpeg(canvas);
+  // 札なしは別の canvas に写しておく（この canvas にはこれから札を描く）
+  const plainCanvas = document.createElement("canvas");
+  plainCanvas.width = w;
+  plainCanvas.height = h;
+  plainCanvas.getContext("2d")!.drawImage(canvas, 0, 0);
 
   // 札あり：枠を先に全部、番号は後から全部。番号が隣の枠の線に消されないため
   const px = (p: [number, number]): [number, number] => [(p[0] - minX) * SCALE, (p[1] - minY) * SCALE];
@@ -129,8 +172,7 @@ export async function renderWindow(segs: Segment[]): Promise<WindowImages> {
     ctx.fillText(s.id, 0, 0);
     ctx.restore();
   });
-  const labeled = toJpeg(canvas);
-  return { ids: segs.map((s) => s.id), plain, labeled, width: w, height: h };
+  return { plain: plainCanvas, labeled: canvas, px };
 }
 
 function toJpeg(canvas: HTMLCanvasElement): string {

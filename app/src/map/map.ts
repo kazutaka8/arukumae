@@ -91,6 +91,8 @@ export function createMap(container: HTMLElement, center: [number, number]): MlM
   })
     .addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right")
     .addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-right")
+    // 現在地。現地で iPad を持って歩くとき、いまどの区切りの前にいるかを見るため（位置の情報は端末の中だけ）
+    .addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showAccuracyCircle: true }), "top-right")
     .addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), "bottom-right");
 }
 

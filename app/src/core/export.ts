@@ -95,11 +95,53 @@ function count(xs: string[]): string {
 }
 
 export function toCsv(rows: ListRow[]): string {
+  return csvOf(COLUMNS, rows);
+}
+
+/**
+ * 公図を買うリスト。登記情報提供サービスで公図（と登記事項）を 1 件ずつ買うときの控え（1 件 360 円）。
+ * 所在・地番が同じ行は 1 つにまとめる（同じ筆が複数の区切りにまたがっても、買うのは 1 件）。
+ * 地区外・別図は hits に入っていないので、ここにも出ない
+ */
+export interface BuyRow {
+  所在: string;
+  地番: string;
+  地番の種類: string;
+  起点からの距離: string;
+  左右: string;
+  道路名とKP: string;
+  かかる面積m2: number;
+  森林の区域: string;
+  購入: string;
+  備考: string;
+}
+
+export const BUY_COLUMNS: (keyof BuyRow)[] = ["所在", "地番", "地番の種類", "起点からの距離", "左右", "道路名とKP", "かかる面積m2", "森林の区域", "購入", "備考"];
+
+export function buildBuyList(rows: ListRow[]): BuyRow[] {
+  const seen = new Map<string, BuyRow>();
+  for (const r of rows) {
+    const key = `${r.所在}\t${r.地番}`;
+    const prev = seen.get(key);
+    if (prev) {
+      prev.かかる面積m2 = Math.round((prev.かかる面積m2 + r.かかる面積m2) * 10) / 10;
+      continue;
+    }
+    seen.set(key, { 所在: r.所在, 地番: r.地番, 地番の種類: r.地番の種類, 起点からの距離: r.起点からの距離, 左右: r.左右, 道路名とKP: r.道路名とKP, かかる面積m2: r.かかる面積m2, 森林の区域: r.森林の区域, 購入: "", 備考: "" });
+  }
+  return [...seen.values()];
+}
+
+export function toBuyCsv(rows: BuyRow[]): string {
+  return csvOf(BUY_COLUMNS, rows);
+}
+
+function csvOf<T extends object>(columns: (keyof T)[], rows: T[]): string {
   const esc = (v: unknown) => {
     const s = String(v ?? "");
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const lines = [COLUMNS.join(","), ...rows.map((r) => COLUMNS.map((c) => esc(r[c])).join(","))];
+  const lines = [columns.join(","), ...rows.map((r) => columns.map((c) => esc(r[c])).join(","))];
   return "﻿" + lines.join("\r\n") + "\r\n";
 }
 
