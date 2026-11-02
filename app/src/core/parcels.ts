@@ -3,10 +3,10 @@
  * 迷う所は「拾う」に倒す：伐採範囲（区切りの合わせたもの）にわずかでも重なれば拾う。
  */
 import * as turf from "@turf/turf";
-import type { Feature, FeatureCollection, MultiPolygon, Polygon } from "geojson";
+import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from "geojson";
 import type { Segment } from "./geom";
 import { toLonLat, toPlane, type EN } from "./proj";
-import type { ParcelHit, ParcelProps } from "./types";
+import { NOT_LAND, type ParcelHit, type ParcelProps } from "./types";
 
 export type ParcelFeature = Feature<Polygon, ParcelProps>;
 
@@ -22,6 +22,14 @@ export function segmentsToGeoJSON(segs: Segment[]): FeatureCollection<Polygon, {
   };
 }
 
+/** かかる部分の形を地図に出す用の GeoJSON（筆ごとに1つ） */
+export function hitsToGeoJSON(hits: ParcelHit[]): FeatureCollection<MultiPolygon, { id: string }> {
+  return {
+    type: "FeatureCollection",
+    features: hits.map((h) => ({ type: "Feature", properties: { id: h.parcelId }, geometry: h.shape })),
+  };
+}
+
 /** 伐採範囲＝区切りを全部合わせた形（左右それぞれ）。面積の計算は平面の上で行うので、座標は平面のまま */
 function planePolygon(ring: EN[]): Feature<Polygon> {
   return turf.polygon([ring.map(([e, n]) => [e, n])]);
@@ -34,17 +42,21 @@ function toPlaneFeature(f: ParcelFeature): Feature<Polygon> {
 /**
  * 筆ごとに、重なる区切りと重なる面積を出す。
  * 区切りは数百、筆は数千なので、先に外接の箱で絞ってから重なりを計算する。
+ * 地区外・別図は土地ではないので最初から除く（types.ts の NOT_LAND）。
  */
 export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[] {
   const segPolys = segs.map((s) => ({ s, poly: planePolygon(s.ring), bbox: turf.bbox(planePolygon(s.ring)) }));
   const hits: ParcelHit[] = [];
   for (const f of parcels) {
+    if (NOT_LAND.has(f.properties.kind)) continue;
     const pf = toPlaneFeature(f);
     const [minX, minY, maxX, maxY] = turf.bbox(pf);
     let area = 0;
     let fromM = Infinity;
     let toM = -Infinity;
     const sides = new Set<"L" | "R">();
+    const segmentIds: string[] = [];
+    const pieces: Feature<Polygon | MultiPolygon>[] = [];
     for (const { s, poly, bbox } of segPolys) {
       if (bbox[2] < minX || bbox[0] > maxX || bbox[3] < minY || bbox[1] > maxY) continue;
       let inter: Feature<Polygon | MultiPolygon> | null = null;
@@ -57,6 +69,8 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
           fromM = Math.min(fromM, s.fromM);
           toM = Math.max(toM, s.toM);
           sides.add(s.side);
+          segmentIds.push(s.id);
+          pieces.push(poly);
         }
         continue;
       }
@@ -68,12 +82,47 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
       fromM = Math.min(fromM, s.fromM);
       toM = Math.max(toM, s.toM);
       sides.add(s.side);
+      segmentIds.push(s.id);
+      pieces.push(inter);
     }
     if (area > 0) {
-      hits.push({ parcelId: f.properties.id, areaM2: Math.round(area * 10) / 10, fromM, toM, sides: [...sides].sort() as ("L" | "R")[] });
+      hits.push({
+        parcelId: f.properties.id,
+        areaM2: Math.round(area * 10) / 10,
+        fromM,
+        toM,
+        sides: [...sides].sort() as ("L" | "R")[],
+        segmentIds,
+        shape: toLonLatShape(pieces),
+      });
     }
   }
   return hits.sort((a, b) => a.fromM - b.fromM);
+}
+
+/** 重なった欠片を1つの形（MultiPolygon、緯度経度）にする。隣の区切り同士の境目の線を消すため、合わせられるなら合わせる */
+function toLonLatShape(pieces: Feature<Polygon | MultiPolygon>[]): MultiPolygon {
+  let merged: Feature<Polygon | MultiPolygon> | null = null;
+  if (pieces.length > 1) {
+    try {
+      merged = turf.union(turf.featureCollection(pieces));
+    } catch {
+      merged = null; // 合わせられない形なら欠片のまま出す。見た目に境目が残るだけで、面積や一覧には影響しない
+    }
+  } else {
+    merged = pieces[0];
+  }
+  const polys: Position[][][] = [];
+  const push = (f: Feature<Polygon | MultiPolygon>) => {
+    if (f.geometry.type === "Polygon") polys.push(f.geometry.coordinates);
+    else polys.push(...f.geometry.coordinates);
+  };
+  if (merged) push(merged);
+  else pieces.forEach(push);
+  return {
+    type: "MultiPolygon",
+    coordinates: polys.map((rings) => rings.map((ring) => ring.map((c) => toLonLat([c[0], c[1]])))),
+  };
 }
 
 function planeArea(f: Feature<Polygon | MultiPolygon>): number {

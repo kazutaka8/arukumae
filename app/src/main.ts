@@ -1,17 +1,19 @@
 /**
  * アルクマエの入口。見本のデータを読み、地図とパネルを組む。
- * 雛形の段階：手順 1・3・5 を見本で触れる。2（取り込み）・4（判定）・6（KP）・7（書き出し）は骨だけ。
+ * 手順 1・3・4・5 を触れる。2（取り込み）・5 の「直す」・6（KP）・7（書き出し）はまだ骨。
  */
 import "./style.css";
-import type { FeatureCollection, Polygon } from "geojson";
-import type { MapGeoJSONFeature, Map as MlMap } from "maplibre-gl";
+import type { FeatureCollection, Polygon, Position } from "geojson";
+import type { LngLatBoundsLike, MapGeoJSONFeature, Map as MlMap, GeoJSONSource } from "maplibre-gl";
 import { buildSegments, leftNormals, resample, type Segment } from "./core/geom";
-import { findHits, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
+import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
+import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
+import { renderWindow, windowsOf } from "./core/photo";
 import { toPlane, type EN } from "./core/proj";
-import type { Judgment, ParcelHit, ParcelKind } from "./core/types";
+import { NOT_LAND, type Judgment, type ParcelHit, type ParcelKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addParcels, addSection, addSegments, applyJudgments, createMap, KIND_COLORS, setGroupVisible, type LayerGroup } from "./map/map";
-import { buildLayout, escapeHtml, openDetail, renderSteps, STEPS } from "./ui/panels";
+import { buildLayout, escapeHtml, leftCover, openDetail, renderSteps, rightCover, STEPS } from "./ui/panels";
 
 interface AppState {
   map: MlMap;
@@ -23,9 +25,15 @@ interface AppState {
   hits: ParcelHit[];
   hitById: Map<string, ParcelHit>;
   judgments: Map<string, Judgment>;
+  demoJudgments: Judgment[];
   selectedParcel: string | null;
   selectedSegment: string | null;
+  /** 判定の進み具合。null なら動いていない */
+  run: { done: number; total: number; usd: number; log: string[]; cancel: boolean } | null;
 }
+
+// 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
+const JUDGMENTS_KEY = "arukumae.judgments.ogawa";
 
 async function main() {
   const root = document.getElementById("app")!;
@@ -40,7 +48,8 @@ async function main() {
   const hits = findHits(parcels, segments);
   console.info(`かかる筆 ${hits.length} 筆（${Math.round(performance.now() - t0)}ms）`);
 
-  const judgments = new Map(demoJudgments.map((j) => [j.segmentId, j]));
+  const saved = loadSavedJudgments();
+  const judgments = new Map((saved ?? demoJudgments).map((j) => [j.segmentId, j]));
   const segmentsGeo = applyJudgments(segmentsToGeoJSON(segments), judgments);
 
   const mid = section.features[0].geometry.coordinates[Math.floor(section.features[0].geometry.coordinates.length / 2)];
@@ -56,15 +65,17 @@ async function main() {
     hits,
     hitById: new Map(hits.map((h) => [h.parcelId, h])),
     judgments,
+    demoJudgments,
     selectedParcel: null,
     selectedSegment: null,
+    run: null,
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
   if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now() };
 
   map.on("load", () => {
-    addParcels(map, parcelsFc);
+    addParcels(map, parcelsFc, hitsToGeoJSON(hits));
     addSegments(map, segmentsGeo);
     addSection(map, section);
     for (const h of hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
@@ -75,7 +86,7 @@ async function main() {
   document.getElementById("project-name")!.textContent = `${section.features[0].properties.road_name}（見本）`;
   renderStep(state);
   renderList(state);
-  wireSettings();
+  wireSettings(state);
 }
 
 /* ---------- 手順 ---------- */
@@ -95,35 +106,32 @@ function renderStep(state: AppState) {
       parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
       break;
     case 2:
-      parts.push(`<div class="dropzone">ここに地図XML・KML・GeoTIFF を落とす<br><span class="small">（雛形ではまだ受け付けません）</span></div>`);
+      parts.push(`<div class="dropzone">ここに地図XML・KML・GeoTIFF を落とす<br><span class="small">（まだ受け付けません）</span></div>`);
       parts.push(`<dl class="kv" style="margin-top:10px"><dt>公図</dt><dd>小川村 2026年版（4枚、区間の周り ${state.parcels.length} 筆）</dd><dt>軌跡図</dt><dd>架空。道路の中心線から幅を取っています</dd></dl>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="3">次へ：かかる筆を見る</button></div>`);
       break;
     case 3: {
       const kinds = countKinds(state);
-      parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲にかかります（${kinds}）。地図の黄色い筆です。押すと詳細が出ます。</p>`);
-      parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。</div>`);
-      parts.push(`<div class="actions"><button class="btn" data-open-list>一覧を開く</button><button class="btn primary" data-go="4">次へ：木を判定する</button></div>`);
+      parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲にかかります（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。</p>`);
+      parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。「地区外」「別図」は隣の地図を指す印なので数えていません。</div>`);
+      parts.push(`<div class="actions"><button class="btn primary" data-go="4">次へ：木を判定する</button></div>`);
       break;
     }
-    case 4: {
-      const judged = state.judgments.size;
-      parts.push(`<p>区切りは <b>${state.segments.length}</b>。見本では ${judged} 区切りが判定済みです（Claude Sonnet 5.5）。</p>`);
-      parts.push(`<div class="actions"><button class="btn primary" disabled>木を判定する <span class="cost">約 $0.3</span></button><p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります（雛形ではまだ呼びません）。</p></div>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-go="5">次へ：確かめて直す</button></div>`);
+    case 4:
+      parts.push(renderJudgeStep(state));
       break;
-    }
     case 5: {
       const low = [...state.judgments.values()].filter((j) => j.conf === "低");
-      parts.push(`<p>現地で確かめる所：<b>${low.length}</b> 区切り（確信が低いもの）。</p>`);
-      parts.push(`<div class="actions"><button class="btn" data-next-low>次の「確かめる所」へ</button><button class="btn primary" data-go="6">次へ：KP</button></div>`);
+      const reviewed = [...state.judgments.values()].filter((j) => j.before);
+      parts.push(`<p>現地で確かめる所：<b>${low.length}</b> 区切り（確信が低いもの）。${reviewed.length ? `見直したのは ${reviewed.length} 区切り。` : ""}</p>`);
+      parts.push(`<div class="actions"><button class="btn" data-next-low ${low.length ? "" : "disabled"}>次の「確かめる所」へ</button><button class="btn primary" data-go="6">次へ：KP</button></div>`);
       break;
     }
     case 6:
-      parts.push(`<p class="muted">雛形ではまだ置けません。</p><div class="actions"><button class="btn primary" data-go="7">次へ：書き出し</button></div>`);
+      parts.push(`<p class="muted">まだ置けません。</p><div class="actions"><button class="btn primary" data-go="7">次へ：書き出し</button></div>`);
       break;
     case 7:
-      parts.push(`<div class="actions"><button class="btn" disabled>一覧表（CSV）</button><button class="btn" disabled>一覧表（Excel）</button><button class="btn" disabled>持って歩く地図（PDF）</button></div><p class="muted small">雛形ではまだ書き出せません。</p>`);
+      parts.push(`<div class="actions"><button class="btn" disabled>一覧表（CSV）</button><button class="btn" disabled>一覧表（Excel）</button><button class="btn" disabled>持って歩く地図（PDF）</button></div><p class="muted small">まだ書き出せません。</p>`);
       break;
   }
   body.innerHTML = parts.join("");
@@ -133,8 +141,132 @@ function renderStep(state: AppState) {
       renderStep(state);
     }),
   );
-  body.querySelector("[data-open-list]")?.addEventListener("click", () => document.getElementById("list-drawer")!.classList.remove("collapsed"));
   body.querySelector("[data-next-low]")?.addEventListener("click", () => nextLow(state));
+  body.querySelector("[data-judge]")?.addEventListener("click", () => runJudging(state));
+  body.querySelector("[data-cancel]")?.addEventListener("click", () => {
+    if (state.run) state.run.cancel = true;
+  });
+  body.querySelector("[data-reset-demo]")?.addEventListener("click", () => {
+    if (!confirm("判定を見本に戻します。この端末に残した判定は消えます。よいですか？")) return;
+    localStorage.removeItem(JUDGMENTS_KEY);
+    state.judgments = new Map(state.demoJudgments.map((j) => [j.segmentId, j]));
+    refreshJudgments(state);
+    renderStep(state);
+  });
+}
+
+function renderJudgeStep(state: AppState): string {
+  const { model, review } = getSettings();
+  const windows = windowsOf(state.segments);
+  const judged = state.judgments.size;
+  const byClaude = [...state.judgments.values()].filter((j) => j.by === "Claude").length;
+  const hasKey = !!getApiKey();
+  const parts: string[] = [];
+  parts.push(`<p>区切りは <b>${state.segments.length}</b>（${windows.length} 窓）。判定済み <b>${judged}</b>${byClaude ? `、うち Claude が ${byClaude}` : ""}。</p>`);
+  if (state.run) {
+    const r = state.run;
+    parts.push(`<div class="progress"><i style="width:${(100 * r.done) / r.total}%"></i></div>`);
+    parts.push(`<p class="small">${r.done} / ${r.total} 窓、ここまで ${fmtUsd(r.usd)}</p>`);
+    parts.push(`<pre class="log">${r.log.map((l) => (l.startsWith("!") ? `<span class="err">${escapeHtml(l.slice(1))}</span>` : escapeHtml(l))).join("\n")}</pre>`);
+    parts.push(`<div class="actions"><button class="btn" data-cancel ${r.cancel ? "disabled" : ""}>${r.cancel ? "止めています…" : "止める"}</button></div>`);
+  } else {
+    const usd = estimateCost(windows.length, model, review);
+    parts.push(
+      `<div class="actions"><button class="btn primary" data-judge ${hasKey ? "" : "disabled"}>${judged ? "全部を判定し直す" : "木を判定する"} <span class="cost">約 ${fmtUsd(usd)}</span></button>` +
+        (hasKey
+          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します` : "はそのまま残します"}。送るのは航空写真の切り抜きだけです。</p>`
+          : `<p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります。</p>`) +
+        `</div>`,
+    );
+    if (localStorage.getItem(JUDGMENTS_KEY)) parts.push(`<div class="actions"><button class="btn" data-reset-demo>判定を見本に戻す</button></div>`);
+    parts.push(`<div class="actions"><button class="btn primary" data-go="5">次へ：確かめて直す</button></div>`);
+  }
+  return parts.join("");
+}
+
+/** 判定を走らせる。窓ごとに 写真を作る → 主のモデル → 確信「低」だけ見直しのモデル。同時に 3 窓まで */
+async function runJudging(state: AppState) {
+  const key = getApiKey();
+  if (!key || state.run) return;
+  const { model, review } = getSettings();
+  const client = makeClient(key);
+  const windows = windowsOf(state.segments);
+  state.run = { done: 0, total: windows.length, usd: 0, log: [], cancel: false };
+  renderStep(state);
+  const log = (s: string) => {
+    state.run?.log.unshift(s);
+    if (state.step === 4) renderStep(state);
+  };
+
+  const one = async (segs: Segment[], k: number) => {
+    if (state.run?.cancel) return;
+    const label = `${segs[0].fromM}〜${segs.at(-1)!.toM}m`;
+    try {
+      const images = await renderWindow(segs);
+      const main = await judgeWindow(client, model, images);
+      if (state.run) state.run.usd += main.usd;
+      if (main.refused) {
+        log(`!窓 ${k + 1}（${label}）：モデルが答えませんでした`);
+      } else {
+        for (const j of main.judgments) state.judgments.set(j.segmentId, j);
+        log(`窓 ${k + 1}（${label}）：${main.judgments.length} 区切り、${Math.round(main.seconds)}秒、${fmtUsd(main.usd)}`);
+        const lows = main.judgments.filter((j) => j.conf === "低").map((j) => j.segmentId);
+        if (review && lows.length && !state.run?.cancel) {
+          const second = await judgeWindow(client, review, images, lows);
+          if (state.run) state.run.usd += second.usd;
+          for (const j of second.judgments) {
+            const first = state.judgments.get(j.segmentId)!;
+            state.judgments.set(j.segmentId, { ...j, before: { tree: first.tree, conf: first.conf, model: first.model } });
+          }
+          const changed = second.judgments.filter((j) => j.tree !== state.judgments.get(j.segmentId)!.before!.tree).length;
+          log(`　見直し ${lows.length} 区切り（${MODELS[review]}）：${changed} 区切りで木の割合が変わりました、${fmtUsd(second.usd)}`);
+        }
+      }
+    } catch (e) {
+      log(`!窓 ${k + 1}（${label}）：${(e as Error).message}`);
+    } finally {
+      if (state.run) state.run.done++;
+      refreshJudgments(state);
+      if (state.step === 4) renderStep(state);
+    }
+  };
+
+  // 同時に 3 窓まで。API の同時の問い合わせの上限と、写真の取り込みの負荷の両方を抑える
+  let next = 0;
+  const workers = Array.from({ length: Math.min(3, windows.length) }, async () => {
+    while (next < windows.length && !state.run?.cancel) {
+      const k = next++;
+      await one(windows[k], k);
+    }
+  });
+  await Promise.all(workers);
+  const total = state.run?.usd ?? 0;
+  state.run = null;
+  saveJudgments(state);
+  if (state.step === 4) renderStep(state);
+  console.info(`判定おわり：${fmtUsd(total)}`);
+}
+
+/** 判定が変わったとき、地図の色・一覧・詳細を合わせる */
+function refreshJudgments(state: AppState) {
+  state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments);
+  (state.map.getSource("segments") as GeoJSONSource | undefined)?.setData(state.segmentsGeo);
+  renderList(state);
+  saveJudgments(state);
+  if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
+}
+
+function saveJudgments(state: AppState) {
+  localStorage.setItem(JUDGMENTS_KEY, JSON.stringify([...state.judgments.values()]));
+}
+
+function loadSavedJudgments(): Judgment[] | null {
+  try {
+    const raw = localStorage.getItem(JUDGMENTS_KEY);
+    return raw ? (JSON.parse(raw) as Judgment[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 function countKinds(state: AppState): string {
@@ -148,7 +280,7 @@ function countKinds(state: AppState): string {
 
 let lowCursor = -1;
 function nextLow(state: AppState) {
-  const lows = [...state.judgments.values()].filter((j) => j.conf === "低");
+  const lows = [...state.judgments.values()].filter((j) => j.conf === "低").sort((a, b) => a.segmentId.localeCompare(b.segmentId));
   if (!lows.length) return;
   lowCursor = (lowCursor + 1) % lows.length;
   selectSegment(state, lows[lowCursor].segmentId, true);
@@ -158,13 +290,12 @@ function nextLow(state: AppState) {
 
 function wireMapClicks(state: AppState) {
   const { map } = state;
-  map.on("click", "segments-fill", (e) => {
-    const f = e.features?.[0];
-    if (f) selectSegment(state, f.properties.id as string, false);
-  });
-  map.on("click", "parcels-fill", (e) => {
-    if (map.queryRenderedFeatures(e.point, { layers: ["segments-fill"] }).length) return; // 区切りの上では区切りを優先
-    const f = e.features?.[0] as MapGeoJSONFeature | undefined;
+  map.on("click", (e) => {
+    // 区切りの上では区切りを優先。筆は、地区外・別図でないものを優先する（地区外の区画は隣の地図の筆を丸ごと覆っているため）
+    const seg = map.queryRenderedFeatures(e.point, { layers: ["segments-fill"] })[0];
+    if (seg) return selectSegment(state, seg.properties.id as string, false);
+    const fs = map.queryRenderedFeatures(e.point, { layers: ["parcels-fill"] }) as MapGeoJSONFeature[];
+    const f = fs.find((f) => !NOT_LAND.has(f.properties.kind as ParcelKind)) ?? fs[0];
     if (f) selectParcel(state, f.properties.id as string, false);
   });
   for (const layer of ["segments-fill", "parcels-fill"]) {
@@ -180,6 +311,17 @@ function clearSelection(state: AppState) {
   document.querySelectorAll("table.list tr.selected").forEach((tr) => tr.classList.remove("selected"));
 }
 
+/** パネルに隠れていない範囲の真ん中に来るよう、余白を付けて飛ぶ */
+function flyTo(state: AppState, bounds: LngLatBoundsLike) {
+  state.map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: leftCover() + 40, right: rightCover() + 40 }, maxZoom: 19, duration: 600 });
+}
+
+function treeOfParcel(state: AppState, h: ParcelHit): { tree: number; n: number } | null {
+  const js = h.segmentIds.map((id) => state.judgments.get(id)).filter((j): j is Judgment => !!j);
+  if (!js.length) return null;
+  return { tree: Math.max(...js.map((j) => j.tree)), n: js.length };
+}
+
 function selectParcel(state: AppState, id: string, fly: boolean) {
   clearSelection(state);
   const p = state.parcelById.get(id);
@@ -190,17 +332,22 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
   const row = document.querySelector(`table.list tr[data-id="${CSS.escape(id)}"]`);
   row?.classList.add("selected");
   row?.scrollIntoView({ block: "nearest" });
+  const notLand = NOT_LAND.has(p.properties.kind);
+  const tree = h ? treeOfParcel(state, h) : null;
   openDetail(
     `${p.properties.oaza ?? ""} ${p.properties.chiban}`,
     `<dl class="kv">
       <dt>種類</dt><dd><span class="badge" style="background:${KIND_COLORS[p.properties.kind]}">${p.properties.kind}</span></dd>
+      ${notLand ? `<dd style="grid-column:1/-1" class="muted small">土地ではなく「この地図ではここから先は描いていない」という印です。この中の筆は隣の地図に載っています。</dd>` : ""}
       <dt>かかる</dt><dd>${h ? `はい。${h.areaM2} m²` : "いいえ"}</dd>
       ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
+      ${h ? `<dt>木（推定）</dt><dd>${tree ? `最大 ${tree.tree}%（${tree.n} 区切り）` : '<span class="muted">まだ判定していません</span>'}</dd>` : ""}
       <dt>地図</dt><dd>${p.properties.map}</dd>
     </dl>
     <p class="muted small" style="margin-top:10px">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p>`,
   );
-  if (fly) state.map.fitBounds(boundsOf(p.geometry.coordinates[0]), { padding: 120, maxZoom: 19 });
+  // かかる部分の形に合わせて飛ぶ。筆全体だと、山林の大きな筆では引きすぎて黄色が点になる
+  if (fly) flyTo(state, boundsOf(h ? h.shape.coordinates.flat(2) : p.geometry.coordinates[0]));
 }
 
 function selectSegment(state: AppState, id: string, fly: boolean) {
@@ -224,16 +371,21 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
              <dt>木以外</dt><dd>${j.other.join("・") || "—"}</dd>
              <dt>確信</dt><dd><span class="badge ${confClass}">${j.conf}</span></dd>
              <dt>理由</dt><dd>${escapeHtml(j.why)}</dd>
-             <dt>決めたのは</dt><dd><span class="badge ${j.by === "人" ? "human" : ""}">${j.by}${j.model ? `（${j.model.replace("claude-", "")}）` : ""}</span></dd>`
+             <dt>決めたのは</dt><dd><span class="badge ${j.by === "人" ? "human" : ""}">${j.by}${j.model ? `（${shortModel(j.model)}）` : ""}</span></dd>
+             ${j.before ? `<dt>最初の判定</dt><dd class="muted">${j.before.tree}%・確信 ${j.before.conf}（${shortModel(j.before.model ?? "")}）→ 見直しました</dd>` : ""}`
           : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
       }
     </dl>
-    <div class="actions" style="margin-top:12px"><button class="btn" disabled>この区切りを直す（雛形では未対応）</button></div>`,
+    <div class="actions" style="margin-top:12px"><button class="btn" disabled>この区切りを直す（まだ）</button></div>`,
   );
-  if (fly) state.map.fitBounds(boundsOf(f.geometry.coordinates[0]), { padding: 160, maxZoom: 19 });
+  if (fly) flyTo(state, boundsOf(f.geometry.coordinates[0]));
 }
 
-function boundsOf(ring: number[][]): [[number, number], [number, number]] {
+function shortModel(m: string): string {
+  return m.replace("claude-", "").replace(/-(\d)-(\d)$/, " $1.$2");
+}
+
+function boundsOf(ring: Position[]): [[number, number], [number, number]] {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const [x, y] of ring) {
     minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
@@ -248,14 +400,16 @@ function renderList(state: AppState) {
   const rows = state.hits
     .map((h) => {
       const p = state.parcelById.get(h.parcelId)!;
-      return `<tr data-id="${escapeHtml(h.parcelId)}">
+      const t = treeOfParcel(state, h);
+      const treeCell = t ? `<span class="tree-bar" title="木の割合の最大 ${t.tree}%"><i style="width:${t.tree}%"></i></span> ${t.tree}%` : `<span class="muted">—</span>`;
+      return `<tr data-id="${escapeHtml(h.parcelId)}" class="${h.parcelId === state.selectedParcel ? "selected" : ""}">
         <td class="num">${h.fromM}〜${h.toM}</td><td>${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}</td>
-        <td>${p.properties.oaza ?? ""}</td><td>${escapeHtml(p.properties.chiban)}</td><td>${p.properties.kind}</td>
-        <td class="num">${h.areaM2}</td><td class="muted">—</td></tr>`;
+        <td title="${escapeHtml(p.properties.oaza ?? "")}">${escapeHtml(p.properties.chiban)}</td>
+        <td class="num">${h.areaM2}</td><td>${treeCell}</td></tr>`;
     })
     .join("");
   document.getElementById("list-body")!.innerHTML = `<table class="list"><thead><tr>
-    <th>起点から（m）</th><th>左右</th><th>大字</th><th>地番</th><th>種類</th><th>かかる面積（m²）</th><th>木（推定）</th>
+    <th>起点から m</th><th>左右</th><th>地番</th><th>かかる m²</th><th>木（推定）</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
   document.querySelectorAll<HTMLTableRowElement>("table.list tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => selectParcel(state, tr.dataset.id!, true)),
@@ -271,7 +425,13 @@ function renderLegend(state: AppState) {
     {
       key: "parcels",
       label: "公図の筆（法務省）",
-      sub: `<span><i class="sw" style="background:#ffeb3b80;border-color:#ffd600"></i>かかる筆</span>` + Object.entries(KIND_COLORS).map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${k}</span>`).join(""),
+      sub:
+        `<span><i class="sw" style="background:#ffeb3b;border-color:#ffd600"></i>かかる部分</span><span><i class="sw" style="border-color:#ffd600;border-width:2px"></i>かかる筆</span>` +
+        Object.entries(KIND_COLORS)
+          .filter(([k]) => !NOT_LAND.has(k as ParcelKind))
+          .map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${k}</span>`)
+          .join("") +
+        `<span><i class="sw" style="border-style:dashed;border-color:#9e9e9e"></i>地区外・別図（隣の地図を見よ）</span>`,
     },
     {
       key: "segments",
@@ -291,19 +451,38 @@ function renderLegend(state: AppState) {
 
 /* ---------- 設定（鍵・モデル） ---------- */
 
-function wireSettings() {
+function getApiKey(): string {
+  return localStorage.getItem("arukumae.apiKey") ?? sessionStorage.getItem("arukumae.apiKey") ?? "";
+}
+
+function getSettings(): { model: ModelId; review: ModelId | "" } {
+  const model = (localStorage.getItem("arukumae.model") as ModelId | null) ?? "claude-sonnet-5-5";
+  const review = (localStorage.getItem("arukumae.review") ?? "claude-fable-5-1") as ModelId | "";
+  return { model: model in MODELS ? model : "claude-sonnet-5-5", review: review === "" || review in MODELS ? review : "claude-fable-5-1" };
+}
+
+function wireSettings(state: AppState) {
   const key = document.getElementById("api-key") as HTMLInputElement;
   const remember = document.getElementById("remember-key") as HTMLInputElement;
+  const modelSel = document.getElementById("model-main") as HTMLSelectElement;
+  const reviewSel = document.getElementById("model-review") as HTMLSelectElement;
   // 既定はその場限り（sessionStorage）。「記憶する」を選んだときだけ localStorage に残す（spec §12）
-  key.value = localStorage.getItem("arukumae.apiKey") ?? sessionStorage.getItem("arukumae.apiKey") ?? "";
+  key.value = getApiKey();
   remember.checked = localStorage.getItem("arukumae.apiKey") !== null;
+  const { model, review } = getSettings();
+  modelSel.value = model;
+  reviewSel.value = review;
   const save = () => {
-    sessionStorage.setItem("arukumae.apiKey", key.value);
-    if (remember.checked) localStorage.setItem("arukumae.apiKey", key.value);
+    const v = key.value.trim();
+    sessionStorage.setItem("arukumae.apiKey", v);
+    if (remember.checked && v) localStorage.setItem("arukumae.apiKey", v);
     else localStorage.removeItem("arukumae.apiKey");
+    localStorage.setItem("arukumae.model", modelSel.value);
+    localStorage.setItem("arukumae.review", reviewSel.value);
+    if (state.step === 4) renderStep(state); // 鍵の有無と費用の目安をボタンに反映する
   };
-  key.addEventListener("change", save);
-  remember.addEventListener("change", save);
+  for (const el of [key, remember, modelSel, reviewSel]) el.addEventListener("change", save);
+  document.getElementById("settings-dialog")!.addEventListener("close", save);
 }
 
 main().catch((e) => {

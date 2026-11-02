@@ -10,7 +10,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // scripts/copy-worker.mjs が public/vendor/ に写したものを、手を入れない形で読む
 maplibregl.setWorkerUrl(`${import.meta.env.BASE_URL}vendor/maplibre-gl-worker.mjs`);
 import type { FeatureCollection, LineString, Polygon } from "geojson";
-import type { Judgment, ParcelKind } from "../core/types";
+import type { FeatureCollection as FC, MultiPolygon } from "geojson";
+import { NOT_LAND, type Judgment, type ParcelKind } from "../core/types";
 
 export const KIND_COLORS: Record<ParcelKind, string> = {
   ふつう: "#f2e7c9",
@@ -25,7 +26,7 @@ export const KIND_COLORS: Record<ParcelKind, string> = {
 export const LAYER_IDS = {
   photo: "photo",
   forest: ["forest-fill", "forest-line"],
-  parcels: ["parcels-fill", "parcels-line", "parcels-hit", "parcels-label"],
+  parcels: ["parcels-fill", "parcels-selected", "parcels-line", "parcels-label", "hit-areas"],
   segments: ["segments-fill", "segments-line", "segments-label"],
   section: ["section-line", "section-ends"],
 } as const;
@@ -127,17 +128,32 @@ export function addSection(map: MlMap, section: FeatureCollection<LineString>) {
   });
 }
 
-export function addParcels(map: MlMap, parcels: FeatureCollection<Polygon>) {
+export function addParcels(map: MlMap, parcels: FeatureCollection<Polygon>, hitAreas: FC<MultiPolygon>) {
   map.addSource("parcels", { type: "geojson", data: parcels, promoteId: "id" });
+  map.addSource("hit-areas", { type: "geojson", data: hitAreas, promoteId: "id" });
   // match の引数は「値, 色, 値, 色, …, 既定の色」。型が厳しいので組み立ててから付ける
   const kindColor = ["match", ["get", "kind"], ...Object.entries(KIND_COLORS).flat(), "#f2e7c9"] as unknown as ExpressionSpecification;
+  // 地区外・別図は土地ではなく「隣の地図を見よ」の印。塗らず、灰色の点線だけにする（types.ts の NOT_LAND）
+  const notLand: ExpressionSpecification = ["in", ["get", "kind"], ["literal", [...NOT_LAND]]];
+  const selected: ExpressionSpecification = ["boolean", ["feature-state", "selected"], false];
+  const hit: ExpressionSpecification = ["boolean", ["feature-state", "hit"], false];
   // かからない筆は控えめに。暗い森の写真の上で線が目立ちすぎ、かかる筆（黄色）と見分けにくくなるため
-  map.addLayer({ id: "parcels-fill", type: "fill", source: "parcels", paint: { "fill-color": kindColor, "fill-opacity": ["interpolate", ["linear"], ["zoom"], 15, 0.03, 18, 0.12] } });
   map.addLayer({
-    id: "parcels-hit",
+    id: "parcels-fill",
     type: "fill",
     source: "parcels",
-    paint: { "fill-color": "#ffeb3b", "fill-opacity": ["case", ["boolean", ["feature-state", "hit"], false], 0.35, 0] },
+    // zoom は最上位の interpolate でしか使えないので、段階ごとの値の中で case を使う
+    paint: { "fill-color": kindColor, "fill-opacity": ["interpolate", ["linear"], ["zoom"], 15, ["case", notLand, 0, 0.03], 18, ["case", notLand, 0, 0.12]] },
+  });
+  // かかる部分（区切りと重なる形）だけを濃い黄色に。筆を丸ごと塗ると、山林の大きな筆が端だけかかっても全体が黄色になり、
+  // 「ここも切るのか」と読めてしまうため
+  map.addLayer({ id: "hit-areas", type: "fill", source: "hit-areas", paint: { "fill-color": "#ffeb3b", "fill-opacity": 0.55 } });
+  // 選んだ筆は塗りも変える。枠だけだと、黄色の筆が並ぶ所やパネルの陰で分からない
+  map.addLayer({
+    id: "parcels-selected",
+    type: "fill",
+    source: "parcels",
+    paint: { "fill-color": "#ff3b30", "fill-opacity": ["case", selected, 0.28, 0] },
   });
   map.addLayer({
     id: "parcels-line",
@@ -145,14 +161,10 @@ export function addParcels(map: MlMap, parcels: FeatureCollection<Polygon>) {
     source: "parcels",
     paint: {
       // かからない筆の線は白く細く、引いて見るほど薄くする。小さな筆が並ぶ所で線が面のように見え、かかる筆の黄色が埋もれるため
-      "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#ff3b30", ["boolean", ["feature-state", "hit"], false], "#ffd600", "#ffffff"],
-      "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, ["boolean", ["feature-state", "hit"], false], 1.8, 0.6],
-      "line-opacity": [
-        "case",
-        ["boolean", ["feature-state", "selected"], false], 1,
-        ["boolean", ["feature-state", "hit"], false], 1,
-        ["interpolate", ["linear"], ["zoom"], 15, 0.08, 17, 0.35, 19, 0.6],
-      ],
+      "line-color": ["case", selected, "#ff3b30", hit, "#ffd600", notLand, "#9e9e9e", "#ffffff"],
+      "line-width": ["case", selected, 3, hit, 1.8, 0.6],
+      "line-dasharray": ["case", notLand, ["literal", [3, 3]], ["literal", [1, 0]]],
+      "line-opacity": ["interpolate", ["linear"], ["zoom"], 15, ["case", selected, 1, hit, 1, 0.08], 17, ["case", selected, 1, hit, 1, 0.35], 19, ["case", selected, 1, hit, 1, 0.6]],
     },
   });
   map.addLayer({
@@ -160,6 +172,7 @@ export function addParcels(map: MlMap, parcels: FeatureCollection<Polygon>) {
     type: "symbol",
     source: "parcels",
     minzoom: 17,
+    filter: ["!", notLand],
     layout: { "text-field": ["get", "chiban"], "text-size": 11, "text-font": ["NotoSansCJKjp-Regular"], "text-allow-overlap": false },
     paint: { "text-color": "#fff", "text-halo-color": "rgba(0,0,0,0.7)", "text-halo-width": 1.2 },
   });

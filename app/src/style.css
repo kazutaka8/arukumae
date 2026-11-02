@@ -69,6 +69,7 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
   z-index: 3; /* 地図の操作ボタン・出典（z-index 2）より手前 */
 }
 .panel.steps { left: 10px; }
+.panel.steps.wide { width: 420px; } /* 一覧の要る手順では広げる。地番と面積と木の列が折り返さずに入る幅 */
 .panel.detail { right: 10px; width: 320px; bottom: auto; max-height: calc(100% - 20px); }
 .panel.collapsed.steps { transform: translateX(calc(-100% - 20px)); opacity: 0; pointer-events: none; }
 .panel.collapsed.detail { transform: translateX(calc(100% + 20px)); opacity: 0; pointer-events: none; }
@@ -77,14 +78,14 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 
 /* 手順 */
 .step-list { list-style: none; margin: 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
-.step-list li { display: flex; align-items: center; gap: 10px; padding: 6px 14px; cursor: pointer; color: var(--muted); }
+.step-list li { display: flex; align-items: center; gap: 10px; padding: 4px 14px; cursor: pointer; color: var(--muted); }
 .step-list li:hover { background: #f3f5f7; }
 .step-list li .num { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
 .step-list li.done { color: var(--ink); }
 .step-list li.done .num { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
 .step-list li.current { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
 .step-list li.current .num { background: var(--accent); border-color: var(--accent); color: #fff; }
-.step-body { padding: 12px 14px; overflow: auto; }
+.step-body { padding: 12px 14px; overflow: auto; flex: none; max-height: 45%; }
 .step-body h3 { margin: 0 0 6px; font-size: 15px; }
 .step-body p { margin: 0 0 10px; line-height: 1.6; }
 .step-body .next { background: #fff8e1; border-left: 3px solid #f9a825; padding: 8px 10px; margin: 10px 0; border-radius: 4px; }
@@ -102,33 +103,28 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .badge.high { background: #e8f5e9; color: #2e7d32; }
 .badge.human { background: #e3f2fd; color: #1565c0; }
 
-/* 一覧（下の引き出し） */
-.drawer {
-  position: absolute;
-  left: 320px;
-  right: 340px;
-  bottom: 0;
-  height: 40%;
-  background: var(--panel);
-  border-radius: var(--radius) var(--radius) 0 0;
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-  transition: transform 0.2s ease;
-  z-index: 3;
-}
-.drawer.collapsed { transform: translateY(calc(100% - 36px)); }
-.drawer-handle { height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 14px; cursor: pointer; font-weight: 600; border-bottom: 1px solid var(--line); }
-.drawer-handle .chev { margin-left: auto; transition: transform 0.2s; }
-.drawer:not(.collapsed) .drawer-handle .chev { transform: rotate(180deg); }
-.drawer-body { overflow: auto; flex: 1; }
+/* 一覧（左のパネルの下半分） */
+.list-section { display: flex; flex-direction: column; flex: 1; min-height: 0; border-top: 1px solid var(--line); }
+.list-head { height: 34px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; cursor: pointer; font-weight: 600; background: #fafbfc; }
+.list-head .chev { margin-left: auto; transition: transform 0.2s; }
+.list-section.folded .chev { transform: rotate(-90deg); }
+.list-section.folded .list-body { display: none; }
+.list-body { overflow: auto; flex: 1; }
 table.list { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.list th, table.list td { padding: 5px 10px; border-bottom: 1px solid #eef1f3; text-align: left; white-space: nowrap; }
+table.list th, table.list td { padding: 4px 8px; border-bottom: 1px solid #eef1f3; text-align: left; white-space: nowrap; }
 table.list th { position: sticky; top: 0; background: #fafbfc; color: var(--muted); font-weight: 600; }
 table.list tr { cursor: pointer; }
 table.list tr:hover td { background: #f3f5f7; }
 table.list tr.selected td { background: var(--accent-soft); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tree-bar { display: inline-block; width: 36px; height: 8px; border-radius: 2px; background: #eceff1; vertical-align: middle; overflow: hidden; }
+.tree-bar i { display: block; height: 100%; background: #2e7d32; }
+
+/* 判定の進み具合 */
+.progress { height: 6px; background: #eceff1; border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.progress i { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
+.log { font-size: 12px; color: var(--muted); max-height: 7em; overflow: auto; margin: 0; }
+.log .err { color: #c62828; }
 
 /* 凡例 */
 .legend {
@@ -166,6 +162,3 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .maplibregl-ctrl-top-right { top: 10px; right: 340px; transition: right 0.2s; }
 .detail.collapsed ~ .maplibregl-ctrl-top-right { right: 10px; }
 
-@media (max-width: 1100px) {
-  .drawer { left: 10px; right: 10px; }
-}
