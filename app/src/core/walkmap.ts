@@ -16,6 +16,7 @@ import { fetchTile, lonLatToPx, metersPerPx, TILE, windowsOf, Z } from "./photo"
 import { toLonLat, type EN } from "./proj";
 import type { KpMark } from "./kp";
 import { estimateKp, fmtKm } from "./kp";
+import { listChecks, type Check } from "./checks";
 import type { ForestInfo } from "./forest";
 import type { Judgment, ParcelHit } from "./types";
 import type { Sweep, TiltZone } from "./vehicle";
@@ -40,6 +41,8 @@ export interface WalkMapInput {
   withPhoto: boolean;
   /** 森林の区域（林野庁）。読めていなければ null */
   forest: Map<string, ForestInfo> | null;
+  /** 森林の区域と判定の食い違い（区切り → 理由） */
+  forestFlags: Map<string, string> | null;
 }
 
 // A4 縦（mm）。描く解像度は 8 px/mm（約 203 dpi）。地理院の写真（z18、約 0.48m／画素）を拡大して貼るので、これ以上細かくしても写真はよくならない
@@ -254,7 +257,7 @@ async function drawMap(ctx: CanvasRenderingContext2D, f: Frame, input: WalkMapIn
     path(ring, true);
     ctx.fillStyle = j ? TREE_FILL[j.tree] ?? TREE_FILL[100] : "rgba(200,200,200,0.3)";
     ctx.fill();
-    ctx.setLineDash(j?.conf === "低" ? [mm(0.8), mm(0.6)] : []);
+    ctx.setLineDash(j?.conf === "低" || input.forestFlags?.has(s.id) ? [mm(0.8), mm(0.6)] : []);
     ctx.strokeStyle = j?.by === "人" ? "#1565c0" : s.side === "L" ? "#ffe600" : "#00dcff";
     ctx.lineWidth = j?.by === "人" ? mm(0.5) : mm(0.25);
     ctx.stroke();
@@ -460,12 +463,13 @@ export async function renderIndexPage(input: WalkMapInput, pages: Segment[][], d
 
   // まとめ
   const lows = checkRows(input, input.segments);
+  const forestLows = lows.filter((r) => r.kind === "森林").length;
   const judged = input.judgments.size;
   const treeArea = input.hits.reduce((a, h) => a + h.segmentIds.reduce((b, id) => b + (input.judgments.get(id) ? (h.segAreas[id] ?? 0) * (input.judgments.get(id)!.tree / 100) : 0), 0), 0);
   const lines = [
     `道路：${input.roadName}　区間：起点から ${input.dense.length - 1}m　筆：かかる筆 ${input.hits.length}　区切り ${input.segments.length}（判定あり ${judged}）`,
     `伐採範囲：${input.trackText}`,
-    `木のある面積（推定・判定のある区切りだけ）：約 ${Math.round(treeArea)} m²　現地で確かめる所（確信が低い区切り）：${lows.length}`,
+    `木のある面積（推定・判定のある区切りだけ）：約 ${Math.round(treeArea)} m²　現地で確かめる所：${lows.length}（確信が低い ${lows.length - forestLows}・森林の区域と食い違う ${forestLows}）`,
     input.kps.length >= 2 ? `KP：人が置いた距離標 ${input.kps.length} 本から中心線に沿って推定（距離標の外側は外挿）` : "KP：距離標が 2 本未満のため出していません",
     input.forest
       ? `森林の区域（林野庁）：民有林の区域にかかる筆 ${input.hits.filter((h) => (input.forest!.get(h.parcelId)?.ratio ?? 0) >= 0.02 && input.forest!.get(h.parcelId)!.kinds.includes("民有林")).length}（伐採の届出が要るかもしれない。要否は市町村に確かめる）`
@@ -498,13 +502,15 @@ interface CheckRow {
   toM: number;
   tree: number;
   why: string;
+  kind: Check["kind"];
 }
 
 function checkRows(input: WalkMapInput, segs: Segment[]): CheckRow[] {
-  return segs
-    .map((s) => ({ s, j: input.judgments.get(s.id) }))
-    .filter((x): x is { s: Segment; j: Judgment } => !!x.j && x.j.conf === "低")
-    .map(({ s, j }) => ({ id: s.id, fromM: s.fromM, toM: s.toM, tree: j.tree, why: j.why }));
+  const byId = new Map(segs.map((s) => [s.id, s]));
+  return listChecks(segs, input.judgments, input.forestFlags).map((c) => {
+    const s = byId.get(c.segmentId)!;
+    return { id: s.id, fromM: s.fromM, toM: s.toM, tree: c.tree, why: c.why, kind: c.kind };
+  });
 }
 
 export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i: number, day: string): Promise<HTMLCanvasElement> {
@@ -531,12 +537,12 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
   ctx.fillStyle = "#1f2933";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`現地で確かめる所（確信が低い区切り）：${rows.length ? `${rows.length} か所` : "この区間にはありません。気づいたことを下に"}`, mm(MARGIN), mm(ty));
+  ctx.fillText(`現地で確かめる所（確信が低い区切り・森林の区域と食い違う区切り）：${rows.length ? `${rows.length} か所` : "この区間にはありません。気づいたことを下に"}`, mm(MARGIN), mm(ty));
   const cols = [
     { label: "区切り", w: 18 },
     { label: "起点から", w: 20 },
     { label: "木", w: 10 },
-    { label: "理由（Claude）", w: 74 },
+    { label: "理由（低＝Claude の確信が低い、森林＝区域と食い違う）", w: 74 },
     { label: "○ ×", w: 14 },
     { label: "メモ", w: PAGE_W - MARGIN * 2 - 136 },
   ];
@@ -562,7 +568,7 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
     y += CHECK_ROW_H;
   };
   drawRow(cols.map((c) => c.label), true);
-  const filled = rows.map((r) => [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, r.why, "○  ×", ""]);
+  const filled = rows.map((r) => [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, `${r.kind === "森林" ? "森林：" : ""}${r.why}`, "○  ×", ""]);
   while (filled.length < 3) filled.push(["", "", "", "", "○  ×", ""]);
   for (const r of filled) drawRow(r, false);
   footer(ctx);

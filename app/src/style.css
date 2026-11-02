@@ -109,6 +109,7 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .badge.low { background: #fff3e0; color: #e65100; }
 .badge.high { background: #e8f5e9; color: #2e7d32; }
 .badge.human { background: #e3f2fd; color: #1565c0; }
+.badge.forest { background: #e8f5e9; color: #2e7d32; }
 
 /* 一覧の列（タブで「かかる筆」「確かめる所」を切り替える） */
 .tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); background: #fafbfc; }

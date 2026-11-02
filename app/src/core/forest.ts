@@ -12,9 +12,10 @@ import { VectorTile } from "@mapbox/vector-tile";
 import * as turf from "@turf/turf";
 import type { Feature, MultiPolygon, Polygon, Position } from "geojson";
 import { PbfReader } from "pbf";
+import type { Segment } from "./geom";
 import { planeArea } from "./parcels";
-import { toPlane } from "./proj";
-import type { ParcelHit } from "./types";
+import { toPlane, type EN } from "./proj";
+import type { Judgment, ParcelHit } from "./types";
 
 const TILE_URL = (z: number, x: number, y: number) => `https://rinya-tiles.geospatial.jp/fr_layer_pbf_2025/${z}/${x}/${y}.pbf`;
 const LAYER = "森林計画対象森林レイヤ";
@@ -86,27 +87,32 @@ export async function fetchForest(bbox: [number, number, number, number], z = FO
 }
 
 /**
- * かかる筆ごとに、かかる部分と区域の重なりを測る。
- * 面積は平面直角座標で測る（turf.area は球面で、ここでは平面のほうが筆の面積と同じ物差しになる）
+ * 区域の多角形を平面直角座標に直して持ち、形との重なりを測る。
+ * 面積は平面で測る（turf.area は球面で、ここでは平面のほうが筆の面積と同じ物差しになる）
  */
-export function forestOfHits(hits: ParcelHit[], polygons: ForestPolygon[]): Map<string, ForestInfo> {
-  const planePolys = polygons.map((p) => ({ p, f: toPlaneFeature(p.geometry), bbox: turf.bbox(toPlaneFeature(p.geometry)) }));
-  const out = new Map<string, ForestInfo>();
-  for (const h of hits) {
-    const hf = toPlaneFeature(h.shape);
-    const [minX, minY, maxX, maxY] = turf.bbox(hf);
-    const total = planeArea(hf);
-    if (total <= 0) continue;
-    let inside = 0;
+export class ForestIndex {
+  private planePolys: { p: ForestPolygon; f: Feature<Polygon | MultiPolygon>; bbox: number[] }[];
+  constructor(polygons: ForestPolygon[]) {
+    this.planePolys = polygons.map((p) => {
+      const f = toPlaneFeature(p.geometry);
+      return { p, f, bbox: turf.bbox(f) };
+    });
+  }
+  /** 平面座標の形（筆のかかる部分、区切りなど）が区域にどれだけ入るか */
+  ratio(shape: Feature<Polygon | MultiPolygon>): ForestInfo {
+    const [minX, minY, maxX, maxY] = turf.bbox(shape);
+    const total = planeArea(shape);
     const kinds = new Set<ForestKind>();
     const rinpan = new Set<string>();
-    for (const { p, f, bbox } of planePolys) {
+    if (total <= 0) return { ratio: 0, kinds: [], rinpan: [] };
+    let inside = 0;
+    for (const { p, f, bbox } of this.planePolys) {
       if (bbox[2] < minX || bbox[0] > maxX || bbox[3] < minY || bbox[1] > maxY) continue;
       let inter: Feature<Polygon | MultiPolygon> | null = null;
       try {
-        inter = turf.intersect(turf.featureCollection([hf, f]));
+        inter = turf.intersect(turf.featureCollection([shape, f]));
       } catch {
-        inter = turf.booleanIntersects(hf, f) ? f : null; // 自分で交わる形はまれ。重なるとみなす
+        inter = turf.booleanIntersects(shape, f) ? f : null; // 自分で交わる形はまれ。重なるとみなす
       }
       if (!inter) continue;
       const a = Math.min(planeArea(inter), total);
@@ -115,7 +121,65 @@ export function forestOfHits(hits: ParcelHit[], polygons: ForestPolygon[]): Map<
       kinds.add(p.kind);
       if (p.rinpan) rinpan.add(p.rinpan);
     }
-    out.set(h.parcelId, { ratio: Math.min(1, inside / total), kinds: [...kinds].sort(), rinpan: [...rinpan].sort() });
+    return { ratio: Math.min(1, inside / total), kinds: [...kinds].sort(), rinpan: [...rinpan].sort() };
+  }
+}
+
+/** かかる筆ごとに、かかる部分と区域の重なりを測る */
+export function forestOfHits(hits: ParcelHit[], polygons: ForestPolygon[] | ForestIndex): Map<string, ForestInfo> {
+  const index = polygons instanceof ForestIndex ? polygons : new ForestIndex(polygons);
+  const out = new Map<string, ForestInfo>();
+  for (const h of hits) out.set(h.parcelId, index.ratio(toPlaneFeature(h.shape)));
+  return out;
+}
+
+/** 区切りごとの重なり。wide は区切りを道と反対の側と前後に 15m 広げた形で測ったもの（区域の縁の近くかどうかを見る） */
+export interface SegmentForest {
+  ratio: number;
+  wide: number;
+}
+
+export function forestOfSegments(segments: Segment[], index: ForestIndex, dense: EN[], normals: EN[], roadHalf: number, margin = 15): Map<string, SegmentForest> {
+  const out = new Map<string, SegmentForest>();
+  for (const s of segments) {
+    const ring = turf.polygon([s.ring.map((p) => [p[0], p[1]])]);
+    const sgn = s.side === "L" ? 1 : -1;
+    const i0 = Math.max(0, s.fromM - margin);
+    const i1 = Math.min(dense.length - 1, s.toM + margin);
+    const inner: EN[] = [];
+    const outer: EN[] = [];
+    for (let i = i0; i <= i1; i++) {
+      const [nx, ny] = normals[i];
+      inner.push([dense[i][0] + sgn * nx * roadHalf, dense[i][1] + sgn * ny * roadHalf]);
+      outer.push([dense[i][0] + sgn * nx * (s.outerMaxM + margin), dense[i][1] + sgn * ny * (s.outerMaxM + margin)]);
+    }
+    const wideRing = [...inner, ...outer.reverse()];
+    wideRing.push(wideRing[0]);
+    let wide: number;
+    try {
+      wide = index.ratio(turf.polygon([wideRing.map((p) => [p[0], p[1]])])).ratio;
+    } catch {
+      wide = index.ratio(ring).ratio; // 広げた形が自分で交わるとき（急カーブ）は区切りそのもので代える
+    }
+    out.set(s.id, { ratio: index.ratio(ring).ratio, wide });
+  }
+  return out;
+}
+
+/**
+ * 森林の区域と判定の食い違い（spec §8.4）。「確かめる所」に入れる理由の言葉を返す。
+ * - 区域の中（区切りも、15m 広げた形も 9 割以上が区域）なのに木が 25% 以下 → もう切られた、別の使い方、の手がかり
+ * - 区域の外（どちらも 1 割以下）なのに木が 75% 以上 → 植林か、区域の線とのずれ
+ * 区域の縁の近く（広げた形が混じる所）は指摘しない。区域の線は 1/5,000 相当で、縁ではずれるのがふつうだから
+ */
+export function forestMismatch(segments: Segment[], judgments: Map<string, Judgment>, segForest: Map<string, SegmentForest>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const s of segments) {
+    const j = judgments.get(s.id);
+    const f = segForest.get(s.id);
+    if (!j || !f) continue;
+    if (f.ratio >= 0.9 && f.wide >= 0.9 && j.tree <= 25) out.set(s.id, `森林計画の対象の区域なのに、写真では木が ${j.tree}%。もう切られたか、別の使い方になっているかもしれません`);
+    else if (f.ratio <= 0.1 && f.wide <= 0.1 && j.tree >= 75) out.set(s.id, `区域外なのに、写真では木が ${j.tree}%。植林か、区域の線とのずれかもしれません`);
   }
   return out;
 }

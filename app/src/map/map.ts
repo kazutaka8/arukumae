@@ -191,7 +191,7 @@ export function addSegments(map: MlMap, segments: FeatureCollection<Polygon>) {
       // 人が直した区切りは青い太枠。誰が決めたかを地図でも見分けるため（spec F10）
       "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#ff3b30", ["==", ["get", "by"], "人"], "#1565c0", ["==", ["get", "side"], "L"], "#ffe600", "#00dcff"],
       "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, ["==", ["get", "by"], "人"], 2.5, 1],
-      "line-dasharray": ["case", ["==", ["get", "conf"], "低"], ["literal", [2, 2]], ["literal", [1, 0]]],
+      "line-dasharray": ["case", ["==", ["get", "check"], true], ["literal", [2, 2]], ["literal", [1, 0]]],
     },
   });
   map.addLayer({
@@ -255,12 +255,14 @@ export function setSourceData(map: MlMap, id: string, data: FC) {
 }
 
 /** 判定を区切りの属性に書き込む（色と点線に使う） */
-export function applyJudgments(segments: FeatureCollection<Polygon>, judgments: Map<string, Judgment>): FeatureCollection<Polygon> {
+export function applyJudgments(segments: FeatureCollection<Polygon>, judgments: Map<string, Judgment>, flags: Map<string, string> | null = null): FeatureCollection<Polygon> {
   return {
     ...segments,
     features: segments.features.map((f) => {
-      const j = judgments.get(f.properties!.id as string);
-      return j ? { ...f, properties: { ...f.properties, tree: j.tree, conf: j.conf, by: j.by } } : f;
+      const id = f.properties!.id as string;
+      const j = judgments.get(id);
+      // check：確かめる所（確信が低い、または森林の区域と食い違う）。地図では点線
+      return j ? { ...f, properties: { ...f.properties, tree: j.tree, conf: j.conf, by: j.by, check: j.conf === "低" || !!flags?.get(id) } } : f;
     }),
   };
 }

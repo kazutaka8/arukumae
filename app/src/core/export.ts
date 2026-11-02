@@ -3,7 +3,9 @@
  * CSV は UTF-8 に BOM を付けて出す。Excel がそのまま日本語を読めるように（BOM がないと Shift_JIS と見なして化ける）。
  * 森林の区域と届出の目印は、林野庁のタイルから筆ごとに出したもの（forest.ts）。まだ読めていなければ空にする
  */
+import { checkText, listChecks } from "./checks";
 import { forestText, noticeText, type ForestInfo } from "./forest";
+import type { Segment } from "./geom";
 import { estimateKp, formatKp, type KpMark } from "./kp";
 import type { Judgment, ParcelHit, ParcelProps } from "./types";
 
@@ -41,7 +43,16 @@ export function buildRows(
   kps: KpMark[],
   roadName: string,
   forest: Map<string, ForestInfo> | null = null,
+  forestFlags: Map<string, string> | null = null,
+  segments: Segment[] = [],
 ): ListRow[] {
+  // 区切りごとの「確かめる所」。確信「低」と森林の食い違いの両方
+  const checksBySeg = new Map<string, ReturnType<typeof listChecks>>();
+  for (const c of listChecks(segments, judgments, forestFlags)) {
+    const arr = checksBySeg.get(c.segmentId) ?? [];
+    arr.push(c);
+    checksBySeg.set(c.segmentId, arr);
+  }
   return hits.map((h) => {
     const p = parcelById.get(h.parcelId)!.properties;
     const js = h.segmentIds.map((id) => judgments.get(id)).filter((j): j is Judgment => !!j);
@@ -51,7 +62,7 @@ export function buildRows(
     const kinds = count(js.map((j) => j.kind).filter((k) => k !== "なし"));
     const others = [...new Set(js.flatMap((j) => j.other))];
     const worst = js.length ? js.reduce((a, b) => (CONF_ORDER[a.conf] <= CONF_ORDER[b.conf] ? a : b)) : null;
-    const lows = js.filter((j) => j.conf === "低");
+    const checks = segments.length ? h.segmentIds.flatMap((id) => checksBySeg.get(id) ?? []) : js.filter((j) => j.conf === "低").map((j) => ({ segmentId: j.segmentId, kind: "低" as const, why: j.why, tree: j.tree }));
     const mid = (h.fromM + h.toM) / 2;
     const est = estimateKp(kps, mid);
     return {
@@ -67,7 +78,7 @@ export function buildRows(
       樹種の目安: kinds,
       木以外: others.join("・"),
       確信: worst ? worst.conf : "",
-      現地で確かめる所: lows.length ? lows.map((j) => `${j.segmentId}：${j.why}`).join(" ／ ") : "",
+      現地で確かめる所: checkText(checks),
       決めたのは: js.length ? (js.some((j) => j.by === "人") ? (js.every((j) => j.by === "人") ? "人" : "人・Claude") : "Claude") : "",
       森林の区域: forest ? forestText(forest.get(h.parcelId)) : "",
       伐採の届出の目印: forest ? noticeText(forest.get(h.parcelId)) : "",

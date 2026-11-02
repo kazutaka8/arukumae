@@ -16,7 +16,8 @@ import { linesToPlane, parseTrackFile, trackGeoJSON, trackKml } from "./core/tra
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
-import { fetchForest, forestOfHits, forestText, noticeText, type ForestInfo, type ForestPolygon } from "./core/forest";
+import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
+import { listChecks, type Check } from "./core/checks";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
@@ -57,9 +58,11 @@ interface AppState {
   /** PDF を描いている最中の進み具合 */
   pdfRun: { done: number; total: number } | null;
   pdfError: string | null;
-  /** 森林の区域（林野庁）。読めるまで null。読めたら筆ごとの重なり */
-  forestPolys: ForestPolygon[] | null;
+  /** 森林の区域（林野庁）。読めるまで null。読めたら筆ごとの重なり、区切りごとの重なり、判定との食い違い */
+  forestIndex: ForestIndex | null;
   forest: Map<string, ForestInfo> | null;
+  segForest: Map<string, SegmentForest> | null;
+  forestFlags: Map<string, string> | null;
   forestNote: string;
 }
 
@@ -117,8 +120,10 @@ async function main() {
     run: null,
     pdfRun: null,
     pdfError: null,
-    forestPolys: null,
+    forestIndex: null,
     forest: null,
+    segForest: null,
+    forestFlags: null,
     forestNote: "森林の区域を読んでいます…",
   };
 
@@ -148,7 +153,7 @@ const HELP = {
   band: "伐採範囲：掃く範囲（軌跡図、または車両の寸法から計算した架空の軌跡図）に余裕幅を足し、そのさらに外へ伐採の幅を足したもの。道路の端（中心線から道路の半幅）より外の部分だけを区切りにします。手順 2 で決め方を変えられます。",
   segment: "区切り：伐採範囲を道に沿って 10m ごと、左右別に分けたもの。番号 L032 は「起点から 320〜330m の左」。この1つずつについて、木の有無を航空写真から判定します。",
   judged: "判定が付いている区切りの数。見本として最初から入っている Claude の判定、この道具から Claude に判定させたもの、人が直したものを合わせた数です。",
-  check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
+  check: "確かめる所：(1) Claude の確信が「低」だった区切り（写真がぼやける・影で見えない・枠の位置が読みにくい、など）と、(2) 森林の区域（林野庁）と判定が食い違う区切り（区域の中なのに木が 25% 以下、区域の外なのに木が 75% 以上。区域の縁から 15m 以内は指摘しない）。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
   forest: "森林の区域：林野庁の「森林計画対象森林レイヤ」（地域森林計画の対象の民有林と国有林の区域、林班）。筆のかかる部分がこの区域にどれだけ入るかを測り、半分未満なら「一部」と書きます。伐採の届出が要るかどうかは、登記の地目ではなく、この民有林の区域かどうかで決まるとされています（自分の理解。森林法第10条の8）。道具は目印を付けるまでで、要否は所管の市町村に確かめてください。区域の線は 1/5,000 相当で、筆の境界とはふつうずれます。",
@@ -192,7 +197,8 @@ function renderStep(state: AppState) {
     case 5: {
       const lows = checkList(state);
       const reviewed = [...state.judgments.values()].filter((j) => j.before);
-      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b> 区切り。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
+      const forestN = lows.filter((c) => c.kind === "森林").length;
+      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN}・森林の区域と食い違う ${forestN}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
       const pos = state.lowCursor >= 0 && state.lowCursor < lows.length ? `${state.lowCursor + 1} / ${lows.length}` : `— / ${lows.length}`;
       parts.push(`<div class="nav"><button class="btn" data-prev-low ${lows.length ? "" : "disabled"}>← 前</button><span class="pos">${pos}</span><button class="btn" data-next-low ${lows.length ? "" : "disabled"}>次 →</button></div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="6">次へ：KP</button></div>`);
@@ -267,7 +273,7 @@ function renderStep(state: AppState) {
     }),
   );
   body.querySelector("[data-csv]")?.addEventListener("click", () => {
-    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest);
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
   });
@@ -586,8 +592,8 @@ function rebuildTrack(state: AppState) {
   state.hits = hits;
   state.hitById = new Map(hits.map((h) => [h.parcelId, h]));
   for (const h of hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: true });
-  if (state.forestPolys) state.forest = forestOfHits(hits, state.forestPolys);
-  state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments);
+  if (state.forestIndex) recomputeForest(state);
+  state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments, state.forestFlags);
   setSourceData(state.map, "segments", state.segmentsGeo);
   setSourceData(state.map, "hit-areas", hitsToGeoJSON(hits));
   setSourceData(state.map, "track", trackGeo(state));
@@ -709,7 +715,8 @@ async function runJudging(state: AppState) {
 
 /** 判定が変わったとき、地図の色・一覧・詳細を合わせる */
 function refreshJudgments(state: AppState) {
-  state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments);
+  if (state.segForest) state.forestFlags = forestMismatch(state.segments, state.judgments, state.segForest);
+  state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments, state.forestFlags);
   (state.map.getSource("segments") as GeoJSONSource | undefined)?.setData(state.segmentsGeo);
   renderList(state);
   renderChecks(state);
@@ -740,9 +747,8 @@ function countKinds(state: AppState): string {
 }
 
 /** 確かめる所＝確信「低」の区切り。起点から順、同じ所は左→右 */
-function checkList(state: AppState): Judgment[] {
-  const order = new Map(state.segments.map((s, i) => [s.id, i]));
-  return [...state.judgments.values()].filter((j) => j.conf === "低").sort((a, b) => (order.get(a.segmentId) ?? 0) - (order.get(b.segmentId) ?? 0));
+function checkList(state: AppState): Check[] {
+  return listChecks(state.segments, state.judgments, state.forestFlags);
 }
 
 function stepLow(state: AppState, dir: 1 | -1) {
@@ -759,20 +765,22 @@ function renderChecks(state: AppState) {
   document.getElementById("check-count")!.textContent = `${lows.length}`;
   const body = document.getElementById("check-body")!;
   if (!lows.length) {
-    body.innerHTML = `<p class="empty">まだありません。手順 4 で判定すると、確信が「低」だった区切りがここに並びます。</p>`;
+    body.innerHTML = `<p class="empty">まだありません。手順 4 で判定すると、確信が「低」だった区切りと、森林の区域と食い違う区切りがここに並びます。</p>`;
     return;
   }
   const rows = lows
-    .map((j, i) => {
-      const seg = state.segments.find((s) => s.id === j.segmentId);
-      const side = j.segmentId.startsWith("L") ? "左" : "右";
-      return `<tr data-seg="${j.segmentId}" class="${j.segmentId === state.selectedSegment ? "selected" : ""}">
+    .map((c, i) => {
+      const seg = state.segments.find((s) => s.id === c.segmentId);
+      const j = state.judgments.get(c.segmentId);
+      const side = c.segmentId.startsWith("L") ? "左" : "右";
+      const tag = c.kind === "森林" ? `<span class="badge forest">森林</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
+      return `<tr data-seg="${c.segmentId}" class="${c.segmentId === state.selectedSegment ? "selected" : ""}">
         <td class="num">${i + 1}</td><td class="num">${seg ? `${seg.fromM}〜${seg.toM}` : ""}</td><td>${side}</td>
-        <td class="num">${j.tree}%</td><td>${j.before ? '<span class="badge">見直し済</span>' : ""}</td>
-        <td class="muted" title="${escapeHtml(j.why)}">${escapeHtml(j.why.length > 18 ? j.why.slice(0, 18) + "…" : j.why)}</td></tr>`;
+        <td class="num">${c.tree}%</td><td>${tag}</td>
+        <td class="muted" title="${escapeHtml(c.why)}">${escapeHtml(c.why.length > 18 ? c.why.slice(0, 18) + "…" : c.why)}</td></tr>`;
     })
     .join("");
-  body.innerHTML = `<table class="list"><thead><tr><th>#</th><th>起点から m</th><th>左右</th><th>木</th><th></th><th>理由</th></tr></thead><tbody>${rows}</tbody></table>`;
+  body.innerHTML = `<table class="list"><thead><tr><th>#</th><th>起点から m</th><th>左右</th><th>木</th><th>種類</th><th>理由</th></tr></thead><tbody>${rows}</tbody></table>`;
   body.querySelectorAll<HTMLTableRowElement>("tr[data-seg]").forEach((tr, i) =>
     tr.addEventListener("click", () => {
       state.lowCursor = i;
@@ -930,6 +938,7 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
       <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
       <dt>面積</dt><dd>${f.properties!.areaM2} m²</dd>
       <dt>外側</dt><dd>中心線から ${f.properties!.outerMaxM} m まで ${help(HELP.band)}</dd>
+      ${state.segForest?.get(id) ? `<dt>森林の区域</dt><dd>${Math.round(state.segForest.get(id)!.ratio * 100)}% が区域の中${state.forestFlags?.get(id) ? `<br><span class="badge forest">食い違い</span> <span class="small">${escapeHtml(state.forestFlags.get(id)!)}</span>` : ""}</dd>` : ""}
       ${
         j
           ? `<dt>木の割合</dt><dd><b>${j.tree}%</b></dd>
@@ -1052,8 +1061,11 @@ async function loadForest(state: AppState) {
   const bbox: [number, number, number, number] = [Math.min(...lls.map((c) => c[0])) - pad, Math.min(...lls.map((c) => c[1])) - pad, Math.max(...lls.map((c) => c[0])) + pad, Math.max(...lls.map((c) => c[1])) + pad];
   try {
     const r = await fetchForest(bbox);
-    state.forestPolys = r.polygons;
-    state.forest = forestOfHits(state.hits, r.polygons);
+    state.forestIndex = new ForestIndex(r.polygons);
+    recomputeForest(state);
+    // 点線（確かめる所）に食い違いを反映する
+    state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments, state.forestFlags);
+    setSourceData(state.map, "segments", state.segmentsGeo);
     const asOf = r.polygons.find((p) => p.asOf)?.asOf ?? "";
     state.forestNote = r.failed ? `森林の区域：タイル ${r.tiles} 枚のうち ${r.failed} 枚を読めませんでした` : `森林の区域：林野庁（データ時点 ${asOf}）`;
     console.info(`${state.forestNote}。多角形 ${r.polygons.length}`);
@@ -1061,8 +1073,18 @@ async function loadForest(state: AppState) {
     state.forestNote = `森林の区域を読めませんでした：${(e as Error).message}`;
   }
   renderList(state);
-  if (state.step === 3 || state.step === 7) renderStep(state);
+  renderChecks(state);
+  if ([3, 5, 7].includes(state.step)) renderStep(state);
   if (state.selectedParcel) selectParcel(state, state.selectedParcel, false);
+  if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
+}
+
+/** 筆ごと・区切りごとの区域の重なりと、判定との食い違いを出し直す（区切りや判定が変わったとき） */
+function recomputeForest(state: AppState) {
+  if (!state.forestIndex) return;
+  state.forest = forestOfHits(state.hits, state.forestIndex);
+  state.segForest = forestOfSegments(state.segments, state.forestIndex, state.dense, state.normals, state.track.band.roadHalf);
+  state.forestFlags = forestMismatch(state.segments, state.judgments, state.segForest);
 }
 
 function forestSummary(state: AppState): string {
@@ -1103,6 +1125,7 @@ function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
     trackText: describeTrack(state.track),
     withPhoto,
     forest: state.forest,
+    forestFlags: state.forestFlags,
   };
 }
 

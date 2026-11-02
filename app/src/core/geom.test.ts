@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildSegments, leftNormals, length, resample, ringArea } from "./geom";
+import * as turf from "@turf/turf";
+import { buildSegments, curveRadii, leftNormals, length, resample, ringArea } from "./geom";
 import type { EN } from "./proj";
 
 describe("中心線の打ち直し", () => {
@@ -52,5 +53,43 @@ describe("区切り", () => {
 describe("多角形の面積", () => {
   it("3-4-5 の直角三角形は 6", () => {
     expect(ringArea([[0, 0], [3, 0], [0, 4]])).toBe(6);
+  });
+});
+
+describe("ヘアピンの区切り", () => {
+  /** 東へ 60m → 半径 8m で左へ 180° → 西へ 60m */
+  const line: EN[] = [[0, 0], [60, 0]];
+  for (let k = 1; k <= 36; k++) {
+    const a = Math.PI * (k / 36);
+    line.push([60 + 8 * Math.sin(a), 8 - 8 * Math.cos(a)]);
+  }
+  line.push([0, 16]);
+  const dense = resample(line, 1);
+  const segs = buildSegments(dense, leftNormals(dense), { step: 10, roadHalf: 3, bandOut: 13, minAreaM2: 30 });
+
+  it("曲がりの半径がだいたい出る（直線は無限大、円弧は 8m 前後で左曲がり）", () => {
+    const r = curveRadii(dense);
+    expect(r[20].radius).toBe(Infinity);
+    const mid = r[60 + 12];
+    expect(mid.turn).toBe(1);
+    expect(mid.radius).toBeGreaterThan(6);
+    expect(mid.radius).toBeLessThan(11);
+  });
+
+  it("内側（左）の区切りの線は折り返さず（自分で交わらず）、面積は正", () => {
+    for (const s of segs) {
+      expect(s.areaM2).toBeGreaterThan(0);
+      const kinks = turf.kinks(turf.polygon([s.ring.map((p) => [p[0], p[1]])]));
+      expect(kinks.features.length, `${s.id} が自分で交わる`).toBe(0);
+    }
+  });
+
+  it("内側の小さい区切りは隣と合わせられ、30m² 未満の区切りは残らない。番号と範囲はつながる", () => {
+    const left = segs.filter((s) => s.side === "L");
+    for (const s of left) expect(s.areaM2).toBeGreaterThanOrEqual(30);
+    expect(left.some((s) => s.toM - s.fromM > 10)).toBe(true); // 合わせた区切りがある
+    for (let i = 1; i < left.length; i++) expect(left[i].fromM).toBe(left[i - 1].toM);
+    // 外側（右）は 10m のまま
+    expect(segs.filter((s) => s.side === "R").every((s) => s.toM - s.fromM <= 10)).toBe(true);
   });
 });
