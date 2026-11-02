@@ -27,3 +27,5 @@ app/public/vendor/
 # ビルドの出力
 app/dist/
 app/node_modules/
+# ビルドの出力を /arukumae/ の下で試すための置き場（launch.json の arukumae-dist）
+app/dist-site/

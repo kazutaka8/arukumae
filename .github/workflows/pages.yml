@@ -1,0 +1,50 @@
+# GitHub Pages に動く版を置く（spec §12「公開」）。
+# main に push するたびに app/ をビルドし、dist/ をそのまま配る。サーバーは持たないので、これだけで全部動く。
+# Pages の設定は「Source: GitHub Actions」にしておく（gh-pages ブランチは使わない。ビルドの出力をリポジトリに入れないため）
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時に 2 つ走ったら、新しいほうだけ残す
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      # 回帰テストが落ちたら配らない（レビューする相手がいないので、テストが唯一の見張り）
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
