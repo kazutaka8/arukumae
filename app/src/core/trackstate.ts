@@ -8,10 +8,10 @@
 import { buildSegments, type Segment } from "./geom";
 import type { EN } from "./proj";
 import { sweepFromLines } from "./track";
-import { curveFlags, DEFAULT_BAND, flatSweep, outerFromSweep, PRESETS, sweepVehicle, type BandParams, type PresetId, type Sweep, type Vehicle } from "./vehicle";
+import { curveFlags, DEFAULT_BAND, flatSweep, outerFromSweep, PRESETS, sweepVehicle, type BandParams, type PresetId, type Sweep, type TiltZone, type Vehicle } from "./vehicle";
 
 export type TrackSource =
-  | { kind: "vehicle"; preset: PresetId; vehicle: Vehicle }
+  | { kind: "vehicle"; preset: PresetId; vehicle: Vehicle; tiltZones: TiltZone[] }
   | { kind: "file"; name: string; lines: EN[][] }
   | { kind: "band"; halfWidth: number };
 
@@ -27,7 +27,7 @@ export interface TrackResult {
 }
 
 export const DEFAULT_TRACK: TrackSetting = {
-  source: { kind: "vehicle", preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle } },
+  source: { kind: "vehicle", preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] },
   band: { ...DEFAULT_BAND },
 };
 
@@ -36,7 +36,7 @@ export function computeTrack(dense: EN[], normals: EN[], t: TrackSetting): Track
   let sweep: Sweep;
   switch (t.source.kind) {
     case "vehicle":
-      sweep = sweepVehicle(dense, normals, t.source.vehicle, curve);
+      sweep = sweepVehicle(dense, normals, t.source.vehicle, t.source.tiltZones);
       break;
     case "file":
       sweep = sweepFromLines(dense, normals, t.source.lines);
@@ -60,7 +60,7 @@ export function describeTrack(t: TrackSetting): string {
   const tail = `＋余裕幅（直線 ${t.band.marginStraight}m・カーブ ${t.band.marginCurve}m）＋${t.band.cut}m`;
   switch (s.kind) {
     case "vehicle":
-      return `架空の軌跡図（${PRESETS[s.preset].name}、ブレード ${s.vehicle.bladeLength}m${s.vehicle.tilt ? `・${s.vehicle.tilt}°${s.vehicle.tiltCurve !== undefined && s.vehicle.tiltCurve !== s.vehicle.tilt ? `／曲がりで ${s.vehicle.tiltCurve}°` : ""} に立てる` : "・水平"}）${tail}`;
+      return `架空の軌跡図（${PRESETS[s.preset].name}、ブレード ${s.vehicle.bladeLength}m${s.vehicle.tilt ? `・${s.vehicle.tilt}° に立てる` : "・寝かせる"}${s.tiltZones.length ? `・起立の区間 ${s.tiltZones.length}` : ""}）${tail}`;
     case "file":
       return `軌跡図「${s.name}」${tail}`;
     case "band":
@@ -80,6 +80,7 @@ export function loadTrack(key: string): TrackSetting | null {
     const t = JSON.parse(raw) as TrackSetting;
     if (!t.source || !t.band) return null;
     if (t.source.kind === "vehicle" && !(t.source.preset in PRESETS)) return null;
+    if (t.source.kind === "vehicle" && !Array.isArray(t.source.tiltZones)) t.source.tiltZones = []; // 区間を入れる前に保存したもの
     return t;
   } catch {
     return null;

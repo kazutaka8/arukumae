@@ -28,7 +28,7 @@ export const LAYER_IDS = {
   forest: ["forest-fill", "forest-line"],
   parcels: ["parcels-fill", "parcels-selected", "parcels-line", "parcels-label", "hit-areas"],
   segments: ["segments-fill", "segments-line", "segments-label"],
-  track: ["track-fill", "track-line", "track-cut"],
+  track: ["track-fill", "track-line", "track-cut", "track-tilt", "track-tilt-label"],
   section: ["section-line", "section-ends"],
   kps: ["kps-point", "kps-label"],
 } as const;
@@ -230,6 +230,22 @@ export function addTrack(map: MlMap, track: FC<Polygon | LineString>) {
     source: "track",
     filter: ["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "kind"], "cut"]],
     paint: { "line-color": "#ff9800", "line-width": 1.5, "line-dasharray": [3, 2] },
+  });
+  // 起立の区間：中心線に沿った青い太線と角度の札
+  map.addLayer({
+    id: "track-tilt",
+    type: "line",
+    source: "track",
+    filter: ["==", ["get", "kind"], "tilt"],
+    paint: { "line-color": "#1565c0", "line-width": 6, "line-opacity": 0.6 },
+  });
+  map.addLayer({
+    id: "track-tilt-label",
+    type: "symbol",
+    source: "track",
+    filter: ["==", ["get", "kind"], "tilt"],
+    layout: { "symbol-placement": "line-center", "text-field": ["get", "label"], "text-size": 12, "text-font": ["NotoSansCJKjp-Bold"], "text-offset": [0, -1.2] },
+    paint: { "text-color": "#1565c0", "text-halo-color": "#fff", "text-halo-width": 2 },
   });
 }
 

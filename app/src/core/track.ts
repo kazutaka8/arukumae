@@ -138,9 +138,10 @@ export function linesToPlane(lines: LonLat[][]): EN[][] {
 
 export interface TrackProps {
   name: string;
-  /** sweep＝掃く範囲、cut＝伐採範囲の外側 */
-  kind: "sweep" | "cut";
+  /** sweep＝掃く範囲、cut＝伐採範囲の外側、tilt＝起立の区間（地図の表示だけ。ファイルには書かない） */
+  kind: "sweep" | "cut" | "tilt";
   side?: "L" | "R";
+  label?: string;
 }
 
 /**
@@ -200,6 +201,7 @@ export function trackKml(fc: FeatureCollection<Polygon | LineString, TrackProps>
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const coords = (pts: Position[]) => pts.map((c) => `${c[0].toFixed(7)},${c[1].toFixed(7)},0`).join(" ");
   const placemarks = fc.features
+    .filter((f) => f.properties.kind !== "tilt")
     .map((f) => {
       const style = f.properties.kind === "sweep" ? "#sweep" : "#cut";
       const geom =

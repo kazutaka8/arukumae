@@ -32,11 +32,17 @@ export interface Vehicle {
   bladeTipWidth: number;
   bladeRootAt: number;
   tilt: number;
-  /**
-   * 曲がりで立てる角度（度）。リフターは曲がりに差しかかるとブレードを立てて水平の長さを縮める。
-   * 車両のどこかがカーブ（curveFlags）に乗っている間はこの角度、それ以外は tilt。省くと tilt のまま
-   */
-  tiltCurve?: number;
+}
+
+/**
+ * 起立の区間：起点から fromM〜toM の間を通るとき、ブレードを tilt 度に立てる（それ以外は Vehicle.tilt）。
+ * 立てられるかは場所による（電線をくぐる所では立てられない）ので、カーブごとに人が決める。
+ * どの区間にいるかは「ブレードの根元の位置」で見る
+ */
+export interface TiltZone {
+  fromM: number;
+  toM: number;
+  tilt: number;
 }
 
 export type PresetId = "lifter" | "extendable";
@@ -47,8 +53,8 @@ export type PresetId = "lifter" | "extendable";
  */
 export const PRESETS: Record<PresetId, { name: string; note: string; vehicle: Vehicle }> = {
   lifter: {
-    name: "ブレードリフター＋多軸台車",
-    note: "山道の定番。曲がりではブレードを立てて水平の長さを縮める。直線の角度と曲がりの角度を分けて計算する",
+    name: "ブレードリフター（公道）",
+    note: "港から積み替え場までの公道で多い。立てられる曲がりでだけブレードを立てて水平の長さを縮める（電線をくぐる所では立てられない）。既定は寝かせたまま＝広め（安全側）",
     vehicle: {
       tractorFront: 1.5,
       tractorWheelbase: 4.0,
@@ -61,13 +67,12 @@ export const PRESETS: Record<PresetId, { name: string; note: string; vehicle: Ve
       bladeRootDia: 4.0,
       bladeTipWidth: 0.5,
       bladeRootAt: 6,
-      tilt: 30,
-      tiltCurve: 60,
+      tilt: 0,
     },
   },
   extendable: {
-    name: "伸縮トレーラー（ブレードは水平）",
-    note: "平地や港の近く向き。ブレードが寝ているので、曲がりで先が大きく外へ振れ、内側も大きく切れ込む",
+    name: "伸縮トレーラー（公道。ブレードは水平）",
+    note: "公道を走れるトレーラー。ブレードは寝たままなので、曲がりで先が大きく外へ振れ、内側も大きく切れ込む。ヤードの中（公道の外）で使う多軸台車（自走式）は、この道具の外",
     vehicle: {
       tractorFront: 1.5,
       tractorWheelbase: 4.0,
@@ -124,25 +129,23 @@ export function extendLine(dense: EN[], before: number, after: number): EN[] {
  * 車両を中心線に沿って 1m ずつ進め、車体とブレードの縁の点を中心線の最寄りの点に投影して、左右の最大を取る。
  * 縁は角だけでなく 1m ごとに拾う。ヘアピンの内側ではブレードが弦のように横切り、いちばん内側に来るのは角ではなく途中だから。
  */
-export function sweepVehicle(dense: EN[], normals: EN[], v: Vehicle, curve?: boolean[]): Sweep {
+export function sweepVehicle(dense: EN[], normals: EN[], v: Vehicle, zones: TiltZone[] = []): Sweep {
   const n = dense.length;
   const left = new Float64Array(n);
   const right = new Float64Array(n);
-  const lhStraight = bladeHorizontal(v);
-  const lhCurve = bladeHorizontal(v, v.tiltCurve ?? v.tilt);
-  const lhMax = Math.max(lhStraight, lhCurve);
-  const rearExtent = Math.max(v.kingpinToAxle + v.trailerTail, v.bladeRootAt + lhMax) + v.tractorWheelbase;
+  const lhBase = bladeHorizontal(v);
+  // 区間の外側（起立しない所）が最も長い。前後に足す長さはそれで決める
+  const rearExtent = Math.max(v.kingpinToAxle + v.trailerTail, v.bladeRootAt + v.bladeLength) + v.tractorWheelbase;
   const ext = Math.ceil(rearExtent + 10);
   const path = extendLine(dense, ext, ext);
   const index = new StationIndex(dense);
-  // 曲がりで立てる：車両（前軸から後ろ rearExtent まで）のどこかがカーブに乗っていれば曲がりの角度。
-  // 車両の位置は path の添字 − ext が中心線の添字（区間の外は直線とみなす）
-  const curveNear = (pathIdx: number): boolean => {
-    if (!curve || v.tiltCurve === undefined) return false;
-    const to = pathIdx - ext;
-    const from = Math.max(0, Math.ceil(to - rearExtent));
-    for (let s = from; s <= Math.min(n - 1, to); s++) if (curve[s]) return true;
-    return false;
+  // ブレードの根元がいる起点からの距離で、起立の区間に入っているかを見る
+  const lhAt = (root: EN): number => {
+    if (!zones.length) return lhBase;
+    const near = index.nearest(root, 150);
+    if (!near) return lhBase;
+    const z = zones.find((z) => near.index >= z.fromM && near.index <= z.toM);
+    return z ? bladeHorizontal(v, z.tilt) : lhBase;
   };
 
   const hit = (p: EN) => {
@@ -188,7 +191,7 @@ export function sweepVehicle(dense: EN[], normals: EN[], v: Vehicle, curve?: boo
     quad(add(K, mul(hr, v.trailerFront)), sub(T, mul(hr, v.trailerTail)), v.trailerWidth, v.trailerWidth);
     // ブレード：根元から後ろへ、水平の投影の長さだけ。幅は根元の直径から先の幅へ細る
     const root = sub(K, mul(hr, v.bladeRootAt));
-    quad(root, sub(root, mul(hr, curveNear(i) ? lhCurve : lhStraight)), v.bladeRootDia, v.bladeTipWidth);
+    quad(root, sub(root, mul(hr, lhAt(root))), v.bladeRootDia, v.bladeTipWidth);
   }
   return { left, right };
 }

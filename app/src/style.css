@@ -202,3 +202,5 @@ table.list.kps { margin-top: 8px; }
 .track .result .err { color: #c62828; }
 .track .row.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .track input[type="file"] { width: 100%; font-size: 12px; }
+.track .zone-add { display: grid; grid-template-columns: 1fr auto 1fr 4.5em auto; gap: 4px; align-items: center; margin-top: 6px; }
+.track .zone-add input { width: 100%; padding: 4px 4px; font: inherit; border: 1px solid var(--line); border-radius: 6px; text-align: right; }

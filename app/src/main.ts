@@ -14,7 +14,7 @@ import { renderWindow, windowsOf } from "./core/photo";
 import { toLonLat, toPlane, type EN } from "./core/proj";
 import { linesToPlane, parseTrackFile, trackGeoJSON, trackKml } from "./core/track";
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
-import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type Vehicle } from "./core/vehicle";
+import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
@@ -48,6 +48,8 @@ interface AppState {
   kps: KpMark[];
   /** 「地図を押して距離標を置く」の最中か */
   placingKp: boolean;
+  /** 「地図を押して起立の区間を指す」の最中。1 点目を押したら fromM が入る */
+  placingTilt: { fromM: number | null } | null;
   /** 判定の進み具合。null なら動いていない */
   run: { done: number; total: number; usd: number; log: string[]; cancel: boolean } | null;
 }
@@ -102,6 +104,7 @@ async function main() {
     lowCursor: -1,
     kps: loadJson<KpMark[]>(KPS_KEY) ?? [],
     placingKp: false,
+    placingTilt: null,
     run: null,
   };
 
@@ -133,6 +136,7 @@ const HELP = {
   check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
+  tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
@@ -260,8 +264,7 @@ function renderStep(state: AppState) {
 /** 車両の寸法の入力欄。ふだん触るものを上に、細かい寸法は畳む */
 const VEHICLE_FIELDS: { key: keyof Vehicle; label: string; unit: string; step: number; min: number; max: number; main?: boolean; lifterOnly?: boolean }[] = [
   { key: "bladeLength", label: "ブレードの長さ", unit: "m", step: 1, min: 10, max: 130, main: true },
-  { key: "tilt", label: "立てる角度（直線）", unit: "°", step: 5, min: 0, max: 80, main: true, lifterOnly: true },
-  { key: "tiltCurve", label: "立てる角度（曲がり）", unit: "°", step: 5, min: 0, max: 80, main: true, lifterOnly: true },
+  { key: "tilt", label: "立てる角度（基本）", unit: "°", step: 5, min: 0, max: 80, main: true, lifterOnly: true },
   { key: "bladeRootDia", label: "根元の直径", unit: "m", step: 0.5, min: 1, max: 8, main: true },
   { key: "kingpinToAxle", label: "キングピン→台車の軸", unit: "m", step: 1, min: 3, max: 60 },
   { key: "bladeRootAt", label: "根元の位置（キングピンから後ろ）", unit: "m", step: 1, min: -10, max: 40 },
@@ -306,14 +309,14 @@ function renderTrackStep(state: AppState): string {
         .join("")}</select>`,
     );
     parts.push(`<p class="muted small">${PRESETS[preset].note}。${help(HELP.vehicle)}</p>`);
-    for (const f of VEHICLE_FIELDS.filter((f) => f.main && (!f.lifterOnly || preset === "lifter"))) parts.push(numField(f.key, f.label, v[f.key] ?? v.tilt, f.unit, f.step, f.min, f.max));
-    const lhC = bladeHorizontal(v, v.tiltCurve ?? v.tilt);
+    for (const f of VEHICLE_FIELDS.filter((f) => f.main && (!f.lifterOnly || preset === "lifter"))) parts.push(numField(f.key, f.label, v[f.key], f.unit, f.step, f.min, f.max));
     parts.push(
-      `<p class="muted small">水平の投影 ${bladeHorizontal(v).toFixed(1)}m${lhC !== bladeHorizontal(v) ? `（曲がりで ${lhC.toFixed(1)}m）` : ""}（長さ × cos 角度）。ブレードの先は台車の軸の ${(v.bladeRootAt + bladeHorizontal(v) - v.kingpinToAxle).toFixed(1)}m 後ろ。</p>`,
+      `<p class="muted small">水平の投影 ${bladeHorizontal(v).toFixed(1)}m（長さ × cos 角度）。ブレードの先は台車の軸の ${(v.bladeRootAt + bladeHorizontal(v) - v.kingpinToAxle).toFixed(1)}m 後ろ。</p>`,
     );
     parts.push(`<details><summary>細かい寸法（台車・トラクタ）</summary>`);
-    for (const f of VEHICLE_FIELDS.filter((f) => !f.main || (f.lifterOnly && preset !== "lifter"))) parts.push(numField(f.key, f.label, v[f.key] ?? v.tilt, f.unit, f.step, f.min, f.max));
+    for (const f of VEHICLE_FIELDS.filter((f) => !f.main || (f.lifterOnly && preset !== "lifter"))) parts.push(numField(f.key, f.label, v[f.key], f.unit, f.step, f.min, f.max));
     parts.push(`</details>`);
+    if (preset === "lifter") parts.push(renderTiltZones(state, t.source.tiltZones));
   } else if (t.source.kind === "file") {
     parts.push(`<div class="dropzone" data-drop>ここに軌跡図（KML・GeoJSON）を落とす<br><input type="file" accept=".kml,.geojson,.json" data-track-file></div>`);
     parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。外側線・内側線・多角形のどれでも構いません。座標はこの端末の外へ出しません。KMZ は解凍して中の KML を。</p>`);
@@ -355,7 +358,7 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
   body.querySelector<HTMLSelectElement>("[data-track-kind]")?.addEventListener("change", (e) => {
     const kind = (e.target as HTMLSelectElement).value as TrackSetting["source"]["kind"];
     state.trackError = null;
-    if (kind === "vehicle") state.track = { ...state.track, source: { kind, preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle } } };
+    if (kind === "vehicle") state.track = { ...state.track, source: { kind, preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] } };
     else if (kind === "file") state.track = { ...state.track, source: { kind, name: "", lines: [] } };
     else state.track = { ...state.track, source: { kind, halfWidth: 13 } };
     // ファイルはまだ読んでいないので、読むまで前の範囲のまま。車両と帯はすぐ計算する
@@ -365,7 +368,8 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
   const form = body.querySelector<HTMLFormElement>("[data-track-form]");
   form?.querySelector<HTMLSelectElement>('select[name="preset"]')?.addEventListener("change", (e) => {
     const preset = (e.target as HTMLSelectElement).value as PresetId;
-    state.track = { ...state.track, source: { kind: "vehicle", preset, vehicle: { ...PRESETS[preset].vehicle } } };
+    const zones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones : [];
+    state.track = { ...state.track, source: { kind: "vehicle", preset, vehicle: { ...PRESETS[preset].vehicle }, tiltZones: zones } };
     rebuildTrack(state);
   });
   form?.addEventListener("submit", (e) => {
@@ -386,9 +390,7 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
     let source = state.track.source;
     if (source.kind === "vehicle") {
       const vehicle = { ...source.vehicle };
-      for (const f of VEHICLE_FIELDS) vehicle[f.key] = num(f.key, vehicle[f.key] ?? vehicle.tilt);
-      // 伸縮トレーラーでは曲がりの角度の欄を出さない。水平（tilt 0）のまま曲がりも同じ角度にする
-      if (source.preset !== "lifter") vehicle.tiltCurve = vehicle.tilt;
+      for (const f of VEHICLE_FIELDS) vehicle[f.key] = num(f.key, vehicle[f.key]);
       source = { ...source, vehicle };
     } else if (source.kind === "band") {
       source = { ...source, halfWidth: num("halfWidth", source.halfWidth) };
@@ -416,16 +418,114 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
       if (f) readTrackFile(state, f);
     });
   }
+  wireTiltZones(state, body);
   body.querySelectorAll<HTMLButtonElement>("[data-save-track]").forEach((b) =>
     b.addEventListener("click", () => {
       const fc = trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer);
       const day = new Date().toISOString().slice(0, 10);
+      const zones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones : [];
+      const zoneNote = zones.length ? `起立の区間：${zones.map((z) => `${z.fromM}〜${z.toM}m を ${z.tilt}°`).join("、")}。` : "";
       const title = `${state.roadName} ${state.track.source.kind === "vehicle" ? "架空の軌跡図" : "軌跡"}（アルクマエ）`;
-      const desc = `${describeTrack(state.track)}。アルクマエで ${day} に作成。${state.track.source.kind === "vehicle" ? "車両の寸法と道路の中心線（OpenStreetMap）から計算した架空の軌跡図で、実在の輸送計画ではありません。" : ""}現地の確認なしに使わないでください。`;
+      const desc = `${describeTrack(state.track)}。${zoneNote}アルクマエで ${day} に作成。${state.track.source.kind === "vehicle" ? "車両の寸法と道路の中心線（OpenStreetMap）から計算した架空の軌跡図で、実在の輸送計画ではありません。" : ""}現地の確認なしに使わないでください。`;
       if (b.dataset.saveTrack === "kml") download(`arukumae_${state.roadName}_軌跡_${day}.kml`, trackKml(fc, title, desc), "application/vnd.google-earth.kml+xml");
-      else download(`arukumae_${state.roadName}_軌跡_${day}.geojson`, JSON.stringify({ ...fc, title, description: desc }), "application/geo+json");
+      else download(`arukumae_${state.roadName}_軌跡_${day}.geojson`, JSON.stringify({ ...fc, features: fc.features.filter((f) => f.properties.kind !== "tilt"), title, description: desc }), "application/geo+json");
     }),
   );
+}
+
+/** 起立の区間の表と、足す手段（数で入れる・地図を押す）。リフターのときだけ */
+function renderTiltZones(state: AppState, zones: TiltZone[]): string {
+  const sorted = [...zones].sort((a, b) => a.fromM - b.fromM);
+  const placing = state.placingTilt;
+  const parts: string[] = [`<h4>起立の区間 ${help(HELP.tiltZone)}</h4>`];
+  if (sorted.length) {
+    parts.push(
+      `<table class="list kps"><thead><tr><th>起点から m</th><th>角度</th><th></th></tr></thead><tbody>` +
+        sorted.map((z, i) => `<tr><td class="num">${z.fromM}〜${z.toM}</td><td class="num">${z.tilt}°</td><td><button type="button" class="btn small" data-del-tilt="${i}">消す</button></td></tr>`).join("") +
+        `</tbody></table>`,
+    );
+  } else {
+    parts.push(`<p class="muted small">まだありません。全区間を基本の角度（${state.track.source.kind === "vehicle" ? state.track.source.vehicle.tilt : 0}°）で運びます。</p>`);
+  }
+  parts.push(
+    `<div class="zone-add"><input type="number" data-zone-from placeholder="から m" min="0" max="${state.dense.length - 1}" step="10"><span>〜</span><input type="number" data-zone-to placeholder="まで m" min="0" max="${state.dense.length - 1}" step="10"><input type="number" data-zone-tilt placeholder="角度 °" value="60" min="0" max="80" step="5"><button type="button" class="btn small" data-add-tilt>足す</button></div>`,
+  );
+  parts.push(
+    `<div class="actions"><button type="button" class="btn small ${placing ? "" : "ghost"}" data-place-tilt>${placing ? (placing.fromM === null ? "やめる（地図で区間の始めを押してください）" : `やめる（始め ${placing.fromM}m。終わりを押してください）`) : "地図を押して区間を指す"}</button></div>`,
+  );
+  return parts.join("");
+}
+
+function wireTiltZones(state: AppState, body: HTMLElement) {
+  if (state.track.source.kind !== "vehicle") return;
+  const src = state.track.source;
+  const setZones = (zones: TiltZone[]) => {
+    state.track = { ...state.track, source: { ...src, tiltZones: zones } };
+    rebuildTrack(state);
+  };
+  body.querySelectorAll<HTMLButtonElement>("[data-del-tilt]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const sorted = [...src.tiltZones].sort((a, b) => a.fromM - b.fromM);
+      sorted.splice(Number(b.dataset.delTilt), 1);
+      setZones(sorted);
+    }),
+  );
+  body.querySelector("[data-add-tilt]")?.addEventListener("click", () => {
+    const from = Number(body.querySelector<HTMLInputElement>("[data-zone-from]")!.value);
+    const to = Number(body.querySelector<HTMLInputElement>("[data-zone-to]")!.value);
+    const tilt = Number(body.querySelector<HTMLInputElement>("[data-zone-tilt]")!.value);
+    const z = normalizeZone(state, from, to, tilt);
+    if (!z) return alert("「から」「まで」は起点からの距離（m）、角度は 0〜80 の数で入れてください");
+    setZones(addZone(src.tiltZones, z));
+  });
+  body.querySelector("[data-place-tilt]")?.addEventListener("click", () => {
+    state.placingTilt = state.placingTilt ? null : { fromM: null };
+    state.placingKp = false;
+    state.map.getCanvas().style.cursor = state.placingTilt ? "crosshair" : "";
+    renderStep(state);
+  });
+}
+
+function normalizeZone(state: AppState, from: number, to: number, tilt: number): TiltZone | null {
+  if (![from, to, tilt].every(Number.isFinite) || tilt < 0 || tilt > 80) return null;
+  const a = Math.max(0, Math.min(from, to));
+  const b = Math.min(state.dense.length - 1, Math.max(from, to));
+  if (b - a < 1) return null;
+  return { fromM: Math.round(a), toM: Math.round(b), tilt };
+}
+
+/** 重なる区間は新しいほうで上書きする（同じ所に 2 つの角度があると、どちらで計算したか分からなくなるため） */
+function addZone(zones: TiltZone[], z: TiltZone): TiltZone[] {
+  const out: TiltZone[] = [];
+  for (const o of zones) {
+    if (o.toM < z.fromM || o.fromM > z.toM) out.push(o);
+    else {
+      if (o.fromM < z.fromM) out.push({ ...o, toM: z.fromM - 1 });
+      if (o.toM > z.toM) out.push({ ...o, fromM: z.toM + 1 });
+    }
+  }
+  out.push(z);
+  return out.sort((a, b) => a.fromM - b.fromM);
+}
+
+/** 地図を押して起立の区間を指す。1 点目が始め、2 点目が終わり。どちらも中心線に投影する */
+function placeTilt(state: AppState, lonLat: [number, number]) {
+  if (!state.placingTilt || state.track.source.kind !== "vehicle") return;
+  const near = nearestOnLine(state.dense, toPlane(lonLat));
+  if (near.dist > 60) return alert("中心線から離れすぎています（60m 以上）。道路の近くを押してください。");
+  if (state.placingTilt.fromM === null) {
+    state.placingTilt = { fromM: near.index };
+    renderStep(state);
+    return;
+  }
+  const raw = prompt(`起点から ${Math.min(state.placingTilt.fromM, near.index)}〜${Math.max(state.placingTilt.fromM, near.index)}m の間で、ブレードを何度に立てますか？（0〜80）`, "60");
+  if (raw === null) return;
+  const z = normalizeZone(state, state.placingTilt.fromM, near.index, Number(raw.replace(/[^\d.]/g, "")));
+  if (!z) return alert("角度は 0〜80 の数で、区間は 1m 以上にしてください");
+  state.placingTilt = null;
+  state.map.getCanvas().style.cursor = "";
+  state.track = { ...state.track, source: { ...state.track.source, tiltZones: addZone(state.track.source.tiltZones, z) } };
+  rebuildTrack(state);
 }
 
 async function readTrackFile(state: AppState, f: File) {
@@ -471,7 +571,15 @@ function rebuildTrack(state: AppState) {
 function trackGeo(state: AppState) {
   // 仮の帯のときは掃く範囲の面を出さない（帯そのものが区切りとして見えている）
   if (state.track.source.kind === "band") return { type: "FeatureCollection", features: [] } as ReturnType<typeof trackGeoJSON>;
-  return trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer);
+  const fc = trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer);
+  // 起立の区間は中心線に沿った太い線と「60°」の札で出す（kind: tilt。ファイルに書くときは外す）
+  if (state.track.source.kind === "vehicle") {
+    for (const z of state.track.source.tiltZones) {
+      const coords = state.dense.slice(z.fromM, z.toM + 1).map((p) => toLonLat(p));
+      if (coords.length >= 2) fc.features.push({ type: "Feature", properties: { name: `起立 ${z.tilt}°（${z.fromM}〜${z.toM}m）`, kind: "tilt", label: `${z.tilt}°` }, geometry: { type: "LineString", coordinates: coords } } as (typeof fc.features)[number]);
+    }
+  }
+  return fc;
 }
 
 function renderJudgeStep(state: AppState): string {
@@ -649,6 +757,7 @@ function wireMapClicks(state: AppState) {
   const { map } = state;
   map.on("click", (e) => {
     if (state.placingKp) return placeKp(state, [e.lngLat.lng, e.lngLat.lat]);
+    if (state.placingTilt) return placeTilt(state, [e.lngLat.lng, e.lngLat.lat]);
     // 区切りの上では区切りを優先。筆は、地区外・別図でないものを優先する（地区外の区画は隣の地図の筆を丸ごと覆っているため）
     const seg = map.queryRenderedFeatures(e.point, { layers: ["segments-fill"] })[0];
     if (seg) return selectSegment(state, seg.properties.id as string, false);

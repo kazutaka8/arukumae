@@ -41,7 +41,7 @@ describe("追従の計算（架空の軌跡図）", () => {
   it("ブレードを立てるほど水平の長さが縮み、掃く幅は狭くなる（リフター：台車が短く、ブレードが幅を決める）", () => {
     const dense = resample(leftTurn(40), 1);
     const normals = leftNormals(dense);
-    const lv = PRESETS.lifter.vehicle;
+    const lv = PRESETS.lifter.vehicle; // 既定は寝かせる（tilt 0）
     const flat = sweepMax(sweepVehicle(dense, normals, { ...lv, tilt: 0 }));
     const up = sweepMax(sweepVehicle(dense, normals, { ...lv, tilt: 60 }));
     expect(bladeHorizontal({ ...v, tilt: 60 })).toBeCloseTo(27.5, 5);
@@ -49,17 +49,17 @@ describe("追従の計算（架空の軌跡図）", () => {
     expect(up.right).toBeLessThan(flat.right);
   });
 
-  it("曲がりで立てる角度を分けると、曲がりの掃く幅は立てた角度のときと同じになり、直線は変わらない", () => {
+  it("起立の区間：その区間を通るときだけ立てる。区間の掃く幅は全部立てたときと同じで、区間の外は寝かせたまま", () => {
     const dense = resample(leftTurn(40), 1);
     const normals = leftNormals(dense);
-    const lv = PRESETS.lifter.vehicle;
-    const curve = curveFlags(dense);
-    const both = sweepVehicle(dense, normals, { ...lv, tilt: 30, tiltCurve: 60 }, curve);
+    const lv = { ...PRESETS.lifter.vehicle, tilt: 0 };
+    const zoned = sweepVehicle(dense, normals, lv, [{ fromM: 150, toM: 330, tilt: 60 }]);
     const up = sweepVehicle(dense, normals, { ...lv, tilt: 60 });
-    const flat = sweepVehicle(dense, normals, { ...lv, tilt: 30 });
-    expect(sweepMax(both).left).toBeCloseTo(sweepMax(up).left, 1);
-    expect(sweepMax(both).left).toBeLessThan(sweepMax(flat).left);
-    expect(both.left[30]).toBeCloseTo(flat.left[30], 3); // 曲がりから遠い直線
+    const flat = sweepVehicle(dense, normals, lv);
+    expect(sweepMax(zoned).left).toBeCloseTo(sweepMax(up).left, 1);
+    expect(sweepMax(zoned).left).toBeLessThan(sweepMax(flat).left);
+    expect(zoned.left[30]).toBeCloseTo(flat.left[30], 3); // 区間に入る前
+    expect(zoned.right[dense.length - 20]).toBeCloseTo(flat.right[dense.length - 20], 3); // 区間を出たあと（直線）
   });
 
   it("中心線の前後に点を足す（車両が区間の外から入って出ていくまでを計算するため）", () => {
