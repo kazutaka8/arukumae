@@ -7,6 +7,13 @@
 - 仕様：[docs/spec.md](docs/spec.md)（機能・受入の条件・Claude の使い方・計画）
 - 入力データの出どころ：[data/README.md](data/README.md)
 - 背景の数字・デモ動画：[docs/background.md](docs/background.md)・[docs/demo.md](docs/demo.md)
+- 試し：[experiments/case_c/](experiments/case_c/)（案C を API で試した結果）
+
+## 作り
+
+- 道具の本体は TypeScript ＋ Vite ＋ MapLibre GL JS（spec §12）。サーバーは持たず、GitHub Pages に置く
+- 前処理と試しは Python（`tools/`・`experiments/`）。環境は `.venv/`
+- 試しで API を呼ぶときの鍵は、キーチェーンの `arukumae-anthropic-api-key` から読む。鍵をファイル・環境変数・ログに出さない
 
 ## 守ること
 

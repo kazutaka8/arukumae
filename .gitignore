@@ -16,3 +16,6 @@ data/raw/
 __pycache__/
 *.pyc
 .venv/
+
+# 試しで取った地理院タイルの写し（出典のあるデータなので、そのままは配らない）
+experiments/case_c/tiles/
