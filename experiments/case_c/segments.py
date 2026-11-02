@@ -29,7 +29,11 @@ ROAD_HALF = 3.0  # 道路の半幅（m）。区切りは道路の端から外側
 BAND_OUT = 13.0  # 試しの伐採範囲の外側（中心線から m）。架空の軌跡図ができるまでの仮の値
 R = 6_371_008.8
 Z = 18  # 全国最新写真は z18 まで（約 0.48m／画素）
-PHOTO_URL = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg"
+# 写真の種類。撮影日の違う写真を見比べる試しのため、選べるようにしてある
+LAYERS = {
+    "seamlessphoto": "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",  # 全国最新写真
+    "nendophoto2022": "https://cyberjapandata.gsi.go.jp/xyz/nendophoto2022/{z}/{x}/{y}.png",  # 2022年度
+}
 
 
 def load_line():
@@ -110,24 +114,25 @@ def ll_to_px(lat, lon, z=Z):
     return x, y
 
 
-def tile(z, x, y):
+def tile(z, x, y, layer="seamlessphoto"):
     TILE_DIR.mkdir(parents=True, exist_ok=True)
-    p = TILE_DIR / f"{z}_{x}_{y}.jpg"
+    # 最初の試しの写し（seamlessphoto）は名前に種類が入っていないので、そのまま使えるようにする
+    p = TILE_DIR / (f"{z}_{x}_{y}.jpg" if layer == "seamlessphoto" else f"{layer}_{z}_{x}_{y}.img")
     if not p.exists():
-        req = urllib.request.Request(PHOTO_URL.format(z=z, x=x, y=y), headers={"User-Agent": "arukumae/0.1 (experiments)"})
+        req = urllib.request.Request(LAYERS[layer].format(z=z, x=x, y=y), headers={"User-Agent": "arukumae/0.1 (experiments)"})
         with urllib.request.urlopen(req, timeout=30) as r:
             p.write_bytes(r.read())
     return Image.open(io.BytesIO(p.read_bytes())).convert("RGB")
 
 
-def mosaic(lat_min, lon_min, lat_max, lon_max, z=Z):
+def mosaic(lat_min, lon_min, lat_max, lon_max, z=Z, layer="seamlessphoto"):
     x0, y1 = ll_to_px(lat_min, lon_min, z)
     x1, y0 = ll_to_px(lat_max, lon_max, z)
     tx0, ty0, tx1, ty1 = int(x0 // 256), int(y0 // 256), int(x1 // 256), int(y1 // 256)
     img = Image.new("RGB", ((tx1 - tx0 + 1) * 256, (ty1 - ty0 + 1) * 256))
     for tx in range(tx0, tx1 + 1):
         for ty in range(ty0, ty1 + 1):
-            img.paste(tile(z, tx, ty), ((tx - tx0) * 256, (ty - ty0) * 256))
+            img.paste(tile(z, tx, ty, layer), ((tx - tx0) * 256, (ty - ty0) * 256))
     crop = (int(x0 - tx0 * 256), int(y0 - ty0 * 256), int(x1 - tx0 * 256), int(y1 - ty0 * 256))
     return img.crop(crop), (x0, y0)
 
@@ -155,7 +160,7 @@ def overview():
     print("書き出し:", OUT_DIR / "overview.png", img.size)
 
 
-def crop(name, kp_from, kp_to, scale=3):
+def crop(name, kp_from, kp_to, scale=3, layer="seamlessphoto"):
     """KP の範囲の区切りを、札なし・札ありの2枚の画像にする。"""
     segs, xy, origin = build_segments()
     sel = [s for s in segs if s["kp_from"] >= kp_from - 1e-9 and s["kp_to"] <= kp_to + 1e-9]
@@ -163,7 +168,7 @@ def crop(name, kp_from, kp_to, scale=3):
     pad = 15 / R * 180 / math.pi  # まわりに 15m の余白
     la = [p[0] for p in lls]
     lo = [p[1] for p in lls]
-    base, (ox, oy) = mosaic(min(la) - pad, min(lo) - pad / math.cos(math.radians(la[0])), max(la) + pad, max(lo) + pad / math.cos(math.radians(la[0])))
+    base, (ox, oy) = mosaic(min(la) - pad, min(lo) - pad / math.cos(math.radians(la[0])), max(la) + pad, max(lo) + pad / math.cos(math.radians(la[0])), layer=layer)
     # 0.48m／画素のままだと 10m の区切りが 20 画素ほどで札が読めないので、拡大する
     base = base.resize((base.width * scale, base.height * scale), Image.LANCZOS)
 
@@ -191,6 +196,46 @@ def crop(name, kp_from, kp_to, scale=3):
     print(f"{name}: 区切り {len(sel)}、画像 {plain.size}")
 
 
+def crop_nagano(name, kp_from, kp_to, tif, scale=2.5):
+    """長野県の航空写真（0.4m／画素）で、同じ区切りの札なし・札ありの画像を作る。
+
+    表示の縮尺を地理院の画像（0.48m を3倍）とそろえるため 2.5倍にする（どちらも約 0.16m／画素）。
+    県の写真から作った画像は、利用者案内の「使用後は破棄」に合わせて tiles/ の下に置き、リポジトリに入れない。
+    """
+    from jgd import to_plane
+
+    Image.MAX_IMAGE_PIXELS = None  # 1枚 7500×6250 画素。PIL の既定の上限の警告を外す
+    tfw = [float(v) for v in Path(tif).with_suffix(".tfw").read_text().split()]
+    px_size, e0, n0 = tfw[0], tfw[4], tfw[5]
+    segs, xy, origin = build_segments()
+    sel = [s for s in segs if s["kp_from"] >= kp_from - 1e-9 and s["kp_to"] <= kp_to + 1e-9]
+
+    def pix(x, y):
+        X, Y = to_plane(*to_ll(x, y, origin))  # X が北、Y が東
+        return ((Y - e0) / px_size, (n0 - X) / px_size)
+
+    pts = [pix(x, y) for s in sel for x, y in s["xy"]]
+    pad = 15 / px_size
+    box = (int(min(p[0] for p in pts) - pad), int(min(p[1] for p in pts) - pad), int(max(p[0] for p in pts) + pad), int(max(p[1] for p in pts) + pad))
+    base = Image.open(tif).convert("RGB").crop(box)
+    base = base.resize((int(base.width * scale), int(base.height * scale)), Image.LANCZOS)
+    plain = base.copy()
+    labeled = base.copy()
+    d = ImageDraw.Draw(labeled)
+    polys = {s["id"]: [((u - box[0]) * scale, (v - box[1]) * scale) for u, v in (pix(x, y) for x, y in s["xy"])] for s in sel}
+    for s in sel:
+        d.polygon(polys[s["id"]], outline=(255, 230, 0) if s["side"] == "L" else (0, 220, 255), width=2)
+    for s in sel:
+        poly = polys[s["id"]]
+        cx = sum(p[0] for p in poly) / len(poly)
+        cy = sum(p[1] for p in poly) / len(poly)
+        d.text((cx, cy), s["id"], fill=(255, 255, 255), font=font(15), anchor="mm", stroke_width=3, stroke_fill=(0, 0, 0))
+    out = TILE_DIR / "nagano"
+    plain.save(out / f"{name}_plain.jpg", quality=90)
+    labeled.save(out / f"{name}_labeled.jpg", quality=90)
+    print(f"{name}: 区切り {len(sel)}、画像 {plain.size}")
+
+
 def poly_area(p):
     return 0.5 * abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(p, p[1:] + p[:1])))
 
@@ -198,5 +243,7 @@ def poly_area(p):
 if __name__ == "__main__":
     if sys.argv[1] == "overview":
         overview()
+    elif sys.argv[1] == "crop-nagano":
+        crop_nagano(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), sys.argv[5])
     elif sys.argv[1] == "crop":
-        crop(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]))
+        crop(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), layer=sys.argv[5] if len(sys.argv) > 5 else "seamlessphoto")

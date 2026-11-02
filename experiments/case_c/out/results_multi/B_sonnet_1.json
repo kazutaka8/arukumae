@@ -1,0 +1,468 @@
+{
+ "mode": "multi",
+ "window": "B",
+ "model": "claude-sonnet-5-5",
+ "run": 1,
+ "seconds": 19.9,
+ "stop_reason": "end_turn",
+ "input_tokens": 7832,
+ "output_tokens": 3087,
+ "usd": 0.0465,
+ "segments": [
+  {
+   "id": "L050",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "道路南側の草地に見える樹木。写真Bでは樹冠が覆っており、写真Aも同様。"
+  },
+  {
+   "id": "R050",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "道路北側の林。両写真とも樹冠で覆われている。道路縁が少し入る可能性あり。"
+  },
+  {
+   "id": "L051",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路",
+    "草地"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "道路外側は草地と樹冠が混在。2枚で大きな差なし。"
+  },
+  {
+   "id": "R051",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "林縁で樹冠が密。2枚で変化なし。"
+  },
+  {
+   "id": "L052",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路",
+    "草地"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "カーブ外側で草地と樹冠が混じる。変化なし。"
+  },
+  {
+   "id": "R052",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "低",
+   "why": "区切りが小さく判定しづらい。樹冠が覆っていると見た。"
+  },
+  {
+   "id": "L053",
+   "tree_now": 50,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "建物",
+    "設備",
+    "裸地",
+    "道路"
+   ],
+   "change": "造成や建物の変化",
+   "conf": "低",
+   "why": "写真Bでは車や小屋のような物と裸地が見える。写真Aより樹冠が減った可能性があり、現地確認が必要。"
+  },
+  {
+   "id": "R053",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "低",
+   "why": "区切りが小さく重なっている。樹冠が覆う。"
+  },
+  {
+   "id": "L054",
+   "tree_now": 75,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "建物",
+    "設備",
+    "裸地"
+   ],
+   "change": "造成や建物の変化",
+   "conf": "低",
+   "why": "写真Bで南端に建物や車が見え、写真Aより樹冠が薄い。迷ったため木側に倒した。"
+  },
+  {
+   "id": "R054",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "道路沿いまで樹冠が密。変化なし。"
+  },
+  {
+   "id": "L055",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密に覆う。2枚で変化なし。"
+  },
+  {
+   "id": "R055",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。変化なし。"
+  },
+  {
+   "id": "L056",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "写真Aは影が濃く、写真Bで樹冠が見える。"
+  },
+  {
+   "id": "R056",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。道路は木の下で一部見える程度。"
+  },
+  {
+   "id": "L057",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。写真Aは影で暗い。"
+  },
+  {
+   "id": "R057",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L058",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。写真Aは影で暗い。"
+  },
+  {
+   "id": "R058",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "道路が一部見えるが樹冠が多い。"
+  },
+  {
+   "id": "L059",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "R059",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "道路縁が見えるが大半は樹冠。"
+  },
+  {
+   "id": "L060",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。写真Aは影が濃い。"
+  },
+  {
+   "id": "R060",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L061",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "低",
+   "why": "道路が一部見える。写真Aは影で判別しにくい。"
+  },
+  {
+   "id": "R061",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "L062",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "低",
+   "why": "道路が見える部分あり。樹冠は多い。"
+  },
+  {
+   "id": "R062",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L063",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "低",
+   "why": "道路が見え樹冠と混在。"
+  },
+  {
+   "id": "R063",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "L064",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "R064",
+   "tree_now": 75,
+   "tree_old": 75,
+   "kind": "広葉樹",
+   "other": [
+    "道路"
+   ],
+   "change": "変化なし",
+   "conf": "低",
+   "why": "道路が見える。樹冠が多い。"
+  },
+  {
+   "id": "L065",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "R065",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L066",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "R066",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L067",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "R067",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L068",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "R068",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  },
+  {
+   "id": "L069",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "混じる",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が覆う。"
+  },
+  {
+   "id": "R069",
+   "tree_now": 100,
+   "tree_old": 100,
+   "kind": "広葉樹",
+   "other": [],
+   "change": "変化なし",
+   "conf": "中",
+   "why": "樹冠が密。"
+  }
+ ]
+}
