@@ -6,8 +6,8 @@
 
 ```bash
 .venv/bin/python experiments/case_c/segments.py overview          # 区間全体の図
-.venv/bin/python experiments/case_c/segments.py crop A 0.10 0.30  # 区切りの画像（札なし・札あり）
-.venv/bin/python experiments/case_c/segments.py crop B 0.50 0.70
+.venv/bin/python experiments/case_c/segments.py crop A 100 300  # 区切りの画像（札なし・札あり）
+.venv/bin/python experiments/case_c/segments.py crop B 500 700
 .venv/bin/python experiments/case_c/run.py                        # 2か所 × 3モデル × 3回（約 $2）
 .venv/bin/python experiments/case_c/forest.py A B                 # 区切りごとの森林の区域の割合
 .venv/bin/python experiments/case_c/analyze.py                    # まとめ
@@ -17,8 +17,8 @@
 
 ```bash
 # 長野県の写真は zip（1.4GB）から区間の図郭 B7-c0 だけを範囲指定で取り、tiles/nagano/ に置く（手順は data/README.md）
-.venv/bin/python experiments/case_c/segments.py crop-nagano A2023 0.10 0.30 experiments/case_c/tiles/nagano/B7-c0.tif
-.venv/bin/python experiments/case_c/segments.py crop-nagano B2023 0.50 0.70 experiments/case_c/tiles/nagano/B7-c0.tif
+.venv/bin/python experiments/case_c/segments.py crop-nagano A2023 100 300 experiments/case_c/tiles/nagano/B7-c0.tif
+.venv/bin/python experiments/case_c/segments.py crop-nagano B2023 500 700 experiments/case_c/tiles/nagano/B7-c0.tif
 cd experiments/case_c && ../../.venv/bin/python run_multi.py single && ../../.venv/bin/python run_multi.py multi
 ../../.venv/bin/python analyze_multi.py
 ```

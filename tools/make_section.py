@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 OUT_DIR = REPO / "data" / "ogawa"
 
-# 起点（KP 0）と終点。南端の畑と民家のあたりから、北端の稲丘の集落へ。
+# 起点（0m）と終点。南端の畑と民家のあたりから、北端の稲丘の集落へ。
 START = (36.644648, 137.991895)  # (緯度, 経度)
 END = (36.650153, 137.986980)
 
@@ -181,7 +181,7 @@ def write_kml(path: Path, line, props) -> None:
     <styleUrl>#center</styleUrl>
     <LineString><tessellate>1</tessellate><coordinates>{coords}</coordinates></LineString>
   </Placemark>
-  <Placemark><name>起点（KP 0）</name><Point><coordinates>{slon:.7f},{slat:.7f},0</coordinates></Point></Placemark>
+  <Placemark><name>起点（0m）</name><Point><coordinates>{slon:.7f},{slat:.7f},0</coordinates></Point></Placemark>
   <Placemark><name>終点</name><Point><coordinates>{elon:.7f},{elat:.7f},0</coordinates></Point></Placemark>
 </Document>
 </kml>
@@ -213,7 +213,7 @@ def main() -> None:
         "name": "デモの輸送路区間（小川村 県道401号 小川長野線の一部。南→北）",
         "road_name": " / ".join(n for n in names if n),
         "road_ref": "401",
-        "direction": "南→北（最初の点が起点 KP 0）",
+        "direction": "南→北（最初の点が起点）",
         "length_m": round(length_m(line)),
         "points": len(line),
         "source": "OpenStreetMap の道路の線から作成（© OpenStreetMap contributors, ODbL）",

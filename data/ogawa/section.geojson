@@ -7,7 +7,7 @@
     "name": "デモの輸送路区間（小川村 県道401号 小川長野線の一部。南→北）",
     "road_name": "小川長野線",
     "road_ref": "401",
-    "direction": "南→北（最初の点が起点 KP 0）",
+    "direction": "南→北（最初の点が起点）",
     "length_m": 1451,
     "points": 96,
     "source": "OpenStreetMap の道路の線から作成（© OpenStreetMap contributors, ODbL）",

@@ -5,7 +5,7 @@ Claude に何を見せればよく判定できるかを、本体の設計より�
 
 使い方:
   .venv/bin/python experiments/case_c/segments.py overview
-  .venv/bin/python experiments/case_c/segments.py crop A 0.00 0.20
+  .venv/bin/python experiments/case_c/segments.py crop A 0 200   # 起点から 0〜200m
 """
 
 from __future__ import annotations
@@ -96,9 +96,9 @@ def build_segments():
             inner = [(xy[i][0] + sgn * ns[i][0] * ROAD_HALF, xy[i][1] + sgn * ns[i][1] * ROAD_HALF) for i in range(i0, i1 + 1)]
             outer = [(xy[i][0] + sgn * ns[i][0] * BAND_OUT, xy[i][1] + sgn * ns[i][1] * BAND_OUT) for i in range(i0, i1 + 1)]
             segs.append({
-                "id": f"{side}{k:03d}",  # L032 = KP 0.320〜0.330 の左
-                "kp_from": round(i0 / 1000, 3),
-                "kp_to": round(i1 / 1000, 3),
+                "id": f"{side}{k:03d}",  # L032 = 起点から 320〜330m の左
+                "from_m": i0,  # 起点からの距離（m）。道路管理者の KP とは別
+                "to_m": i1,
                 "side": side,
                 "xy": inner + outer[::-1],
             })
@@ -160,10 +160,10 @@ def overview():
     print("書き出し:", OUT_DIR / "overview.png", img.size)
 
 
-def crop(name, kp_from, kp_to, scale=3, layer="seamlessphoto"):
-    """KP の範囲の区切りを、札なし・札ありの2枚の画像にする。"""
+def crop(name, from_m, to_m, scale=3, layer="seamlessphoto"):
+    """起点からの距離（m）の範囲の区切りを、札なし・札ありの2枚の画像にする。"""
     segs, xy, origin = build_segments()
-    sel = [s for s in segs if s["kp_from"] >= kp_from - 1e-9 and s["kp_to"] <= kp_to + 1e-9]
+    sel = [s for s in segs if s["from_m"] >= from_m and s["to_m"] <= to_m]
     lls = [to_ll(x, y, origin) for s in sel for x, y in s["xy"]]
     pad = 15 / R * 180 / math.pi  # まわりに 15m の余白
     la = [p[0] for p in lls]
@@ -196,7 +196,7 @@ def crop(name, kp_from, kp_to, scale=3, layer="seamlessphoto"):
     print(f"{name}: 区切り {len(sel)}、画像 {plain.size}")
 
 
-def crop_nagano(name, kp_from, kp_to, tif, scale=2.5):
+def crop_nagano(name, from_m, to_m, tif, scale=2.5):
     """長野県の航空写真（0.4m／画素）で、同じ区切りの札なし・札ありの画像を作る。
 
     表示の縮尺を地理院の画像（0.48m を3倍）とそろえるため 2.5倍にする（どちらも約 0.16m／画素）。
@@ -208,7 +208,7 @@ def crop_nagano(name, kp_from, kp_to, tif, scale=2.5):
     tfw = [float(v) for v in Path(tif).with_suffix(".tfw").read_text().split()]
     px_size, e0, n0 = tfw[0], tfw[4], tfw[5]
     segs, xy, origin = build_segments()
-    sel = [s for s in segs if s["kp_from"] >= kp_from - 1e-9 and s["kp_to"] <= kp_to + 1e-9]
+    sel = [s for s in segs if s["from_m"] >= from_m and s["to_m"] <= to_m]
 
     def pix(x, y):
         X, Y = to_plane(*to_ll(x, y, origin))  # X が北、Y が東
@@ -244,6 +244,6 @@ if __name__ == "__main__":
     if sys.argv[1] == "overview":
         overview()
     elif sys.argv[1] == "crop-nagano":
-        crop_nagano(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), sys.argv[5])
+        crop_nagano(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5])
     elif sys.argv[1] == "crop":
-        crop(sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), layer=sys.argv[5] if len(sys.argv) > 5 else "seamlessphoto")
+        crop(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), layer=sys.argv[5] if len(sys.argv) > 5 else "seamlessphoto")
