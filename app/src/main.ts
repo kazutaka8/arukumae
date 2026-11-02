@@ -19,6 +19,7 @@ import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
 import { listChecks, type Check } from "./core/checks";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
+import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
 import { buildLayout, escapeHtml, help, leftCover, openDetail, renderSteps, rightCover, showListTab, STEPS } from "./ui/panels";
@@ -64,12 +65,39 @@ interface AppState {
   segForest: Map<string, SegmentForest> | null;
   forestFlags: Map<string, string> | null;
   forestNote: string;
+  /** 公図の出どころ（見本か、読み込んだファイルか）と、地図ごとの報告 */
+  parcelSource: ParcelSource;
+  /** 見本の筆。「見本に戻す」用 */
+  demoParcels: ParcelFeature[];
+  /** 公図を読んでいる最中の進み具合。null なら動いていない */
+  parcelRun: { bytes: number; total: number; maps: number; kept: number; current: string | null } | null;
+  parcelError: string | null;
+}
+
+interface ParcelSource {
+  fromFile: boolean;
+  fileName: string | null;
+  maps: MapReport[];
+  skipped: string[];
+  /** この端末に残せたか（大きすぎると残せない） */
+  persisted: boolean;
+}
+
+/** 読み込んだ公図をこの端末に残す形 */
+interface SavedParcels {
+  fileName: string;
+  maps: MapReport[];
+  skipped: string[];
+  features: ParcelFeature[];
 }
 
 // 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
 const JUDGMENTS_KEY = "arukumae.judgments.ogawa";
 const KPS_KEY = "arukumae.kps.ogawa";
 const TRACK_KEY = "arukumae.track.ogawa";
+const PARCELS_KEY = "arukumae.parcels.ogawa";
+/** 公図から残す幅：区間の両側（m）。前処理（tools/cut_parcels.py）と同じ */
+const PARCEL_BUFFER_M = 200;
 
 async function main() {
   const root = document.getElementById("app")!;
@@ -82,7 +110,10 @@ async function main() {
   const track = loadTrack(TRACK_KEY) ?? DEFAULT_TRACK;
   const trackResult = computeTrack(dense, normals, track);
   const segments = trackResult.segments;
-  const parcels = parcelsFc.features as ParcelFeature[];
+  const demoParcels = parcelsFc.features as ParcelFeature[];
+  // 前に読み込んだ公図がこの端末に残っていれば、見本ではなくそれを使う
+  const savedParcels = loadJson<SavedParcels>(PARCELS_KEY);
+  const parcels = savedParcels?.features?.length ? savedParcels.features : demoParcels;
   const t0 = performance.now();
   const hits = findHits(parcels, segments);
   console.info(`かかる筆 ${hits.length} 筆（${Math.round(performance.now() - t0)}ms）`);
@@ -125,13 +156,19 @@ async function main() {
     segForest: null,
     forestFlags: null,
     forestNote: "森林の区域を読んでいます…",
+    parcelSource: savedParcels?.features?.length
+      ? { fromFile: true, fileName: savedParcels.fileName, maps: savedParcels.maps, skipped: savedParcels.skipped, persisted: true }
+      : { fromFile: false, fileName: null, maps: [], skipped: [], persisted: true },
+    demoParcels,
+    parcelRun: null,
+    parcelError: null,
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
-  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput };
+  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput, importParcels };
 
   map.on("load", () => {
-    addParcels(map, parcelsFc, hitsToGeoJSON(hits));
+    addParcels(map, parcelsToGeoJSON(parcels), hitsToGeoJSON(hits));
     addSegments(map, segmentsGeo);
     addTrack(map, trackGeo(state));
     addSection(map, section);
@@ -160,6 +197,8 @@ const HELP = {
   walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」の表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
   tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
+  mojxml:
+    "地図XML：法務省が無料で公開している公図の電子データ（登記所備付地図データ）の形式。G空間情報センターから市町村ごとの zip で配られ、中に地図ごとの zip と XML が入っています。公共座標系の地図はそのまま重なります。任意座標系の地図（筆の半分以上がこれ）は図面の中だけの座標なので、位置を合わせないと重なりません。この道具はまだ位置合わせに対応していないので、読み飛ばして枚数だけ伝えます。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
 
@@ -326,7 +365,7 @@ function numField(name: string, label: string, value: number, unit: string, step
 function renderTrackStep(state: AppState): string {
   const t = state.track;
   const parts: string[] = [`<div class="track">`];
-  parts.push(`<dl class="kv"><dt>公図</dt><dd>小川村 2026年版（4枚、区間の周り ${state.parcels.length} 筆）。見本では取り込み済み</dd></dl>`);
+  parts.push(renderParcelStep(state));
   parts.push(`<h4>伐採範囲の決め方 ${help(HELP.band)}</h4>`);
   parts.push(
     `<select class="wide" data-track-kind>
@@ -455,6 +494,7 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
     });
   }
   wireTiltZones(state, body);
+  wireParcelStep(state, body);
   body.querySelectorAll<HTMLButtonElement>("[data-save-track]").forEach((b) =>
     b.addEventListener("click", () => {
       const fc = trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer);
@@ -580,6 +620,140 @@ async function readTrackFile(state: AppState, f: File) {
     state.trackError = (e as Error).message;
     renderStep(state);
   }
+}
+
+/* ---------- 手順 2：公図（地図XML）の取り込み ---------- */
+
+function parcelsToGeoJSON(parcels: ParcelFeature[]): FeatureCollection<Polygon> {
+  return { type: "FeatureCollection", features: parcels };
+}
+
+function describeParcels(state: AppState): string {
+  const s = state.parcelSource;
+  const mapCount = new Set(state.parcels.map((p) => p.properties.map)).size;
+  if (!s.fromFile) return `小川村 2026年版（見本。地図 ${mapCount} 枚、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}）`;
+  const pub = s.maps.filter((m) => m.isPublic).length;
+  const arb = s.maps.length - pub;
+  return `${s.fileName}：地図 ${s.maps.length} 枚（公共座標系 ${pub}${arb ? `・任意座標系 ${arb} は読み飛ばし` : ""}）、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}`;
+}
+
+function renderParcelStep(state: AppState): string {
+  const s = state.parcelSource;
+  const parts: string[] = [`<h4>公図（地図XML） ${help(HELP.mojxml)}</h4>`];
+  parts.push(`<p>いま：${escapeHtml(describeParcels(state))}${s.fromFile && !s.persisted ? '<br><span class="muted small">大きいのでこの端末には残せません。ページを開き直すと見本に戻ります。</span>' : ""}</p>`);
+  const run = state.parcelRun;
+  if (run) {
+    const mb = (b: number) => (b / 1e6).toFixed(1);
+    parts.push(`<div class="progress"><i style="width:${run.total ? (100 * run.bytes) / run.total : 0}%"></i></div>`);
+    parts.push(`<p class="small">読んでいます… ${mb(run.bytes)} / ${mb(run.total)} MB。地図 ${run.maps} 枚、区間の周りの筆 ${run.kept}${run.current ? `<br><span class="muted">${escapeHtml(run.current)}</span>` : ""}</p>`);
+  } else {
+    parts.push(`<div class="dropzone" data-parcel-drop>ここに公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
+    if (state.parcelError) parts.push(`<p class="small" style="color:#c62828">${escapeHtml(state.parcelError)}</p>`);
+    if (s.fromFile && s.maps.length) {
+      parts.push(`<details><summary>地図ごとの内訳（${s.maps.length} 枚）</summary><table class="list small"><thead><tr><th>地図</th><th>座標系</th><th class="num">筆</th><th class="num">残した</th></tr></thead><tbody>`);
+      for (const m of [...s.maps].sort((a, b) => b.kept - a.kept || a.stem.localeCompare(b.stem))) {
+        parts.push(`<tr><td>${escapeHtml(m.stem)}</td><td>${escapeHtml(m.crs || "？")}</td><td class="num">${m.total}</td><td class="num">${m.isPublic ? m.kept : "—"}</td></tr>`);
+      }
+      parts.push(`</tbody></table></details>`);
+      parts.push(`<div class="row btns"><button class="btn small" data-parcel-demo>見本の公図に戻す</button></div>`);
+    }
+  }
+  parts.push(
+    `<p class="muted small">法務省「登記所備付地図データ」の zip をそのまま落とせます（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${PARCEL_BUFFER_M}m の筆だけを残します。170MB ほどの地図でも数秒。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
+  );
+  return parts.join("");
+}
+
+function wireParcelStep(state: AppState, body: HTMLElement) {
+  const input = body.querySelector<HTMLInputElement>("[data-parcel-file]");
+  input?.addEventListener("change", () => {
+    const f = input.files?.[0];
+    if (f) importParcels(state, f);
+  });
+  const drop = body.querySelector<HTMLElement>("[data-parcel-drop]");
+  if (drop) {
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) importParcels(state, f);
+    });
+  }
+  body.querySelector("[data-parcel-demo]")?.addEventListener("click", () => {
+    localStorage.removeItem(PARCELS_KEY);
+    state.parcelSource = { fromFile: false, fileName: null, maps: [], skipped: [], persisted: true };
+    state.parcelError = null;
+    applyParcels(state, state.demoParcels);
+  });
+}
+
+/** 公図のファイルをワーカーで読み、区間の周りの筆に入れ替える */
+function importParcels(state: AppState, file: File) {
+  if (state.parcelRun) return;
+  state.parcelRun = { bytes: 0, total: file.size, maps: 0, kept: 0, current: null };
+  state.parcelError = null;
+  renderStep(state);
+  const worker = new Worker(new URL("./core/mojxml.worker.ts", import.meta.url), { type: "module" });
+  worker.onmessage = (e: MessageEvent<WorkerOut>) => {
+    const m = e.data;
+    if (m.type === "progress") {
+      state.parcelRun = { bytes: m.bytes, total: m.total, maps: m.maps, kept: m.kept, current: m.current };
+      if (state.step === 2) renderStep(state);
+      return;
+    }
+    worker.terminate();
+    state.parcelRun = null;
+    if (m.type === "error") {
+      state.parcelError = `${file.name} を読めませんでした：${m.message}`;
+      renderStep(state);
+      return;
+    }
+    const pub = m.maps.filter((x) => x.isPublic);
+    if (!m.maps.length) {
+      state.parcelError = `${file.name} は地図XML ではないようです。法務省の地図データの zip か、その中の XML を落としてください。`;
+      renderStep(state);
+      return;
+    }
+    if (!m.features.length) {
+      state.parcelError = pub.length
+        ? `${file.name} を読みましたが（地図 ${m.maps.length} 枚）、この区間の両側 ${PARCEL_BUFFER_M}m に筆がありません。別の市町村の地図かもしれません。`
+        : `${file.name} の地図 ${m.maps.length} 枚は全部任意座標系で、位置を合わせないと重なりません（まだ対応していません）。`;
+      renderStep(state);
+      return;
+    }
+    // この端末に残す（大きければ残せない。その旨を画面に出す）
+    let persisted = true;
+    try {
+      localStorage.setItem(PARCELS_KEY, JSON.stringify({ fileName: file.name, maps: m.maps, skipped: m.skipped, features: m.features } satisfies SavedParcels));
+    } catch {
+      persisted = false;
+      localStorage.removeItem(PARCELS_KEY);
+    }
+    state.parcelSource = { fromFile: true, fileName: file.name, maps: m.maps, skipped: m.skipped, persisted };
+    applyParcels(state, m.features);
+    console.info(`公図を読んだ：${file.name}、地図 ${m.maps.length} 枚、筆 ${m.features.length}（${m.ms}ms）`);
+  };
+  worker.onerror = (e) => {
+    worker.terminate();
+    state.parcelRun = null;
+    state.parcelError = `${file.name} を読めませんでした：${e.message}`;
+    renderStep(state);
+  };
+  worker.postMessage({ file, dense: state.dense, bufferM: PARCEL_BUFFER_M } satisfies WorkerIn);
+}
+
+/** 筆を入れ替え、かかる筆・森林・一覧・地図を作り直す */
+function applyParcels(state: AppState, parcels: ParcelFeature[]) {
+  for (const h of state.hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: false });
+  state.parcels = parcels;
+  state.parcelById = new Map(parcels.map((p) => [p.properties.id, p]));
+  setSourceData(state.map, "parcels", parcelsToGeoJSON(parcels));
+  rebuildTrack(state);
 }
 
 /** 伐採範囲の決め方が変わったとき、区切り・かかる筆・地図・一覧を全部作り直す */

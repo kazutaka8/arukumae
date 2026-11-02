@@ -205,3 +205,8 @@ table.list.kps { margin-top: 8px; }
 .track input[type="file"] { width: 100%; font-size: 12px; }
 .track .zone-add { display: grid; grid-template-columns: 1fr auto 1fr 4.5em auto; gap: 4px; align-items: center; margin-top: 6px; }
 .track .zone-add input { width: 100%; padding: 4px 4px; font: inherit; border: 1px solid var(--line); border-radius: 6px; text-align: right; }
+
+/* 手順 2 の公図の内訳（地図ごとの筆の数）。一覧の表より小さく */
+.track table.list.small { font-size: 12px; margin: 6px 0; }
+.track table.list.small th, .track table.list.small td { padding: 2px 6px; }
+.track table.list .num { text-align: right; }
