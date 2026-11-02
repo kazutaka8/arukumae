@@ -19,6 +19,7 @@ __pycache__/
 
 # 試しで取った地理院タイルの写し（出典のあるデータなので、そのままは配らない）
 experiments/case_c/tiles/
+experiments/case_a/tiles/
 
 # MapLibre の Worker の写し（scripts/copy-worker.mjs が作る）
 app/public/vendor/

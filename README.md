@@ -28,7 +28,7 @@ Built with Claude: Japan 2026 に向けて、2026年11月2日から作ってい�
 
 - **公図（地図XML）の zip をそのまま落として読む。** 法務省の市町村ごとの zip（中に地図ごとの zip と XML）を、展開せずにワーカーで流し読みし、区間の両側 200m の筆だけを残す。小川村（38MB、地図 28 枚、主の地図は展開すると 170MB）で約 7 秒。ファイルは端末の外へ出さず、読んだ筆はこの端末に残る。任意座標系の地図は読み飛ばして枚数だけ伝える
 
-まだのもの：公図の位置合わせ（任意座標系の地図）。
+まだのもの：公図の位置合わせ（任意座標系の地図）。Claude に試した結果は [experiments/case_a/](experiments/case_a/) に（手がかりの 1 点は当てるが、基準点は人が打つのがよさそう）。
 
 ## 動かし方
 
@@ -53,6 +53,7 @@ npm run build      # dist/ に静的ファイル
 | [docs/demo.md](docs/demo.md) | デモ動画の筋と素材 |
 | [data/README.md](data/README.md) | 入力データの出どころと利用条件 |
 | [experiments/case_c/](experiments/case_c/) | 木の判定を Claude で試した記録（3モデル、撮影日の違う写真） |
+| [experiments/case_a/](experiments/case_a/) | 座標のない公図を Claude が航空写真に合わせられるかを試した記録（粗い当たりまで。道具には入れていない） |
 
 ## データの出典
 
