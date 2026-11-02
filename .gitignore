@@ -1,0 +1,18 @@
+# 鍵。公開リポジトリなので、見本は .example にして実物は入れない
+.env
+.env.*
+!.env.example
+
+# 大きな元データ（公図の zip など）。取り方は data/README.md
+data/raw/
+
+# レビューの記録は手元だけ
+.codex-review/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
