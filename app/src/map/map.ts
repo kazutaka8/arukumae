@@ -28,6 +28,7 @@ export const LAYER_IDS = {
   forest: ["forest-fill", "forest-line"],
   parcels: ["parcels-fill", "parcels-selected", "parcels-line", "parcels-label", "hit-areas"],
   segments: ["segments-fill", "segments-line", "segments-label"],
+  track: ["track-fill", "track-line", "track-cut"],
   section: ["section-line", "section-ends"],
   kps: ["kps-point", "kps-label"],
 } as const;
@@ -201,6 +202,40 @@ export function addSegments(map: MlMap, segments: FeatureCollection<Polygon>) {
     layout: { "text-field": ["get", "id"], "text-size": 10, "text-font": ["NotoSansCJKjp-Bold"] },
     paint: { "text-color": "#fff", "text-halo-color": "rgba(0,0,0,0.8)", "text-halo-width": 1.5 },
   });
+}
+
+/**
+ * 軌跡（掃く範囲と伐採範囲の外側）。掃く範囲は薄い紫の面と紫の縁、伐採範囲の外側は橙の点線。
+ * 中心線（赤）と見分けるため赤は使わない。区切りの上に重ねるが、面は薄くして区切りの色（木の割合）が読めるようにする
+ */
+export function addTrack(map: MlMap, track: FC<Polygon | LineString>) {
+  map.addSource("track", { type: "geojson", data: track });
+  map.addLayer({
+    id: "track-fill",
+    type: "fill",
+    source: "track",
+    filter: ["==", ["geometry-type"], "Polygon"],
+    paint: { "fill-color": "#7b1fa2", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: "track-line",
+    type: "line",
+    source: "track",
+    filter: ["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "kind"], "sweep"]],
+    paint: { "line-color": "#7b1fa2", "line-width": 1.5, "line-opacity": 0.9 },
+  });
+  map.addLayer({
+    id: "track-cut",
+    type: "line",
+    source: "track",
+    filter: ["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "kind"], "cut"]],
+    paint: { "line-color": "#ff9800", "line-width": 1.5, "line-dasharray": [3, 2] },
+  });
+}
+
+/** GeoJSON の源の中身を差し替える。まだ地図ができていなければ何もしない（読み込みの前に呼ばれることがある） */
+export function setSourceData(map: MlMap, id: string, data: FC) {
+  (map.getSource(id) as maplibregl.GeoJSONSource | undefined)?.setData(data);
 }
 
 /** 判定を区切りの属性に書き込む（色と点線に使う） */

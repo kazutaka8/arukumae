@@ -122,10 +122,15 @@ function toJpeg(canvas: HTMLCanvasElement): string {
  * 窓の数を先に決めてから均等に割る。端から 200m ずつ切ると最後の窓だけ 50m になり、写真が狭くて札が読みにくいため
  */
 export function windowsOf(segments: Segment[], maxPairs = 20): Segment[][] {
-  const pairs = segments.length / 2;
-  const n = Math.max(1, Math.ceil(pairs / maxPairs));
-  const per = Math.ceil(pairs / n) * 2; // 左右をそろえるため偶数
+  // 「対」は同じ起点からの距離の左右。軌跡図によっては片側しかない所があるので、区切りの数ではなく距離の種類で数える
+  const stations = [...new Set(segments.map((s) => s.fromM))].sort((a, b) => a - b);
+  const n = Math.max(1, Math.ceil(stations.length / maxPairs));
+  const per = Math.ceil(stations.length / n);
   const out: Segment[][] = [];
-  for (let i = 0; i < segments.length; i += per) out.push(segments.slice(i, i + per));
+  for (let i = 0; i < stations.length; i += per) {
+    const group = new Set(stations.slice(i, i + per));
+    const w = segments.filter((s) => group.has(s.fromM));
+    if (w.length) out.push(w);
+  }
   return out;
 }

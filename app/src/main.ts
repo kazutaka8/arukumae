@@ -6,15 +6,18 @@ import "./style.css";
 import type { FeatureCollection, Point, Polygon, Position } from "geojson";
 import type { LngLatBoundsLike, MapGeoJSONFeature, Map as MlMap, GeoJSONSource } from "maplibre-gl";
 import { buildRows, download, toCsv } from "./core/export";
-import { buildSegments, leftNormals, nearestOnLine, resample, type Segment } from "./core/geom";
+import { leftNormals, nearestOnLine, resample, type Segment } from "./core/geom";
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./core/kp";
 import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
 import { renderWindow, windowsOf } from "./core/photo";
 import { toLonLat, toPlane, type EN } from "./core/proj";
+import { linesToPlane, parseTrackFile, trackGeoJSON, trackKml } from "./core/track";
+import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
+import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type Vehicle } from "./core/vehicle";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
-import { addKps, addParcels, addSection, addSegments, applyJudgments, createMap, KIND_COLORS, setGroupVisible, type LayerGroup } from "./map/map";
+import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
 import { buildLayout, escapeHtml, help, leftCover, openDetail, renderSteps, rightCover, showListTab, STEPS } from "./ui/panels";
 
 interface AppState {
@@ -22,7 +25,13 @@ interface AppState {
   step: number;
   /** 中心線を 1m ごとに打ち直した点。添字＝起点からの距離（m） */
   dense: EN[];
+  normals: EN[];
   roadName: string;
+  /** 伐採範囲の決め方（手順 2）と、その計算の結果 */
+  track: TrackSetting;
+  trackResult: TrackResult;
+  /** 手順 2 で読み込みに失敗したときの言葉 */
+  trackError: string | null;
   segments: Segment[];
   segmentsGeo: FeatureCollection<Polygon>;
   parcels: ParcelFeature[];
@@ -46,6 +55,7 @@ interface AppState {
 // 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
 const JUDGMENTS_KEY = "arukumae.judgments.ogawa";
 const KPS_KEY = "arukumae.kps.ogawa";
+const TRACK_KEY = "arukumae.track.ogawa";
 
 async function main() {
   const root = document.getElementById("app")!;
@@ -54,7 +64,10 @@ async function main() {
   const [section, parcelsFc, demoJudgments] = await Promise.all([loadSection(), loadParcels(), loadDemoJudgments()]);
   const line = section.features[0].geometry.coordinates.map((c) => toPlane([c[0], c[1]]) as EN);
   const dense = resample(line, 1);
-  const segments = buildSegments(dense, leftNormals(dense));
+  const normals = leftNormals(dense);
+  const track = loadTrack(TRACK_KEY) ?? DEFAULT_TRACK;
+  const trackResult = computeTrack(dense, normals, track);
+  const segments = trackResult.segments;
   const parcels = parcelsFc.features as ParcelFeature[];
   const t0 = performance.now();
   const hits = findHits(parcels, segments);
@@ -71,7 +84,11 @@ async function main() {
     map,
     step: 3,
     dense,
+    normals,
     roadName: section.features[0].properties.road_name,
+    track,
+    trackResult,
+    trackError: null,
     segments,
     segmentsGeo,
     parcels,
@@ -94,6 +111,7 @@ async function main() {
   map.on("load", () => {
     addParcels(map, parcelsFc, hitsToGeoJSON(hits));
     addSegments(map, segmentsGeo);
+    addTrack(map, trackGeo(state));
     addSection(map, section);
     addKps(map, kpsGeo(state));
     for (const h of hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
@@ -109,12 +127,13 @@ async function main() {
 }
 
 const HELP = {
-  band: "伐採範囲（仮）：輸送路の中心線から左右 3〜13m、つまり道路の端から外側 10m の帯です。軌跡図を取り込めるようになったら、その外側線から決めます。",
+  band: "伐採範囲：掃く範囲（軌跡図、または車両の寸法から計算した架空の軌跡図）に余裕幅を足し、そのさらに外へ伐採の幅を足したもの。道路の端（中心線から道路の半幅）より外の部分だけを区切りにします。手順 2 で決め方を変えられます。",
   segment: "区切り：伐採範囲を道に沿って 10m ごと、左右別に分けたもの。番号 L032 は「起点から 320〜330m の左」。この1つずつについて、木の有無を航空写真から判定します。",
   judged: "判定が付いている区切りの数。見本として最初から入っている Claude の判定、この道具から Claude に判定させたもの、人が直したものを合わせた数です。",
   check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
+  vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
 
@@ -130,14 +149,12 @@ function renderStep(state: AppState) {
   const parts: string[] = [`<h3>${s.n}. ${s.title}</h3><p>${s.hint}</p>`];
   switch (state.step) {
     case 1:
-      parts.push(`<dl class="kv"><dt>案件名</dt><dd>小川村 県道401号（見本）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${Math.round(state.segments.at(-1)!.toM)} m</dd><dt>伐採範囲</dt><dd>仮：中心線から 3〜13m ${help(HELP.band)}</dd></dl>`);
-      parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。見本では取り込み済みです。</div>`);
+      parts.push(`<dl class="kv"><dt>案件名</dt><dd>小川村 県道401号（見本）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${state.dense.length - 1} m</dd><dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`);
+      parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。見本では公図は取り込み済みで、軌跡図は車両の寸法から架空のものを作っています。</div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
       break;
     case 2:
-      parts.push(`<div class="dropzone">ここに地図XML・KML・GeoTIFF を落とす<br><span class="small">（まだ受け付けません）</span></div>`);
-      parts.push(`<dl class="kv" style="margin-top:10px"><dt>公図</dt><dd>小川村 2026年版（4枚、区間の周り ${state.parcels.length} 筆）</dd><dt>軌跡図</dt><dd>架空。道路の中心線から幅を取っています</dd></dl>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-go="3">次へ：かかる筆を見る</button></div>`);
+      parts.push(renderTrackStep(state));
       break;
     case 3: {
       const kinds = countKinds(state);
@@ -177,7 +194,7 @@ function renderStep(state: AppState) {
       }
       if (marks.length >= 2) {
         const a = estimateKp(marks, 0)!;
-        const b = estimateKp(marks, state.segments.at(-1)!.toM)!;
+        const b = estimateKp(marks, state.dense.length - 1)!;
         parts.push(`<div class="next">起点 ${fmtKm(a.kp)}km → 終点 ${fmtKm(b.kp)}km（推定）。距離標の外側は外挿です。</div>`);
       } else if (marks.length === 1) {
         parts.push(`<div class="next">あと 1 本置くと、補間できます。</div>`);
@@ -197,6 +214,7 @@ function renderStep(state: AppState) {
     }
   }
   body.innerHTML = parts.join("");
+  if (state.step === 2) wireTrackStep(state, body);
   body.querySelectorAll<HTMLButtonElement>("[data-go]").forEach((b) =>
     b.addEventListener("click", () => {
       state.step = Number(b.dataset.go);
@@ -235,6 +253,225 @@ function renderStep(state: AppState) {
     refreshJudgments(state);
     renderStep(state);
   });
+}
+
+/* ---------- 手順 2：伐採範囲の決め方（軌跡図・架空の軌跡図・仮の帯） ---------- */
+
+/** 車両の寸法の入力欄。ふだん触るものを上に、細かい寸法は畳む */
+const VEHICLE_FIELDS: { key: keyof Vehicle; label: string; unit: string; step: number; min: number; max: number; main?: boolean; lifterOnly?: boolean }[] = [
+  { key: "bladeLength", label: "ブレードの長さ", unit: "m", step: 1, min: 10, max: 130, main: true },
+  { key: "tilt", label: "立てる角度（直線）", unit: "°", step: 5, min: 0, max: 80, main: true, lifterOnly: true },
+  { key: "tiltCurve", label: "立てる角度（曲がり）", unit: "°", step: 5, min: 0, max: 80, main: true, lifterOnly: true },
+  { key: "bladeRootDia", label: "根元の直径", unit: "m", step: 0.5, min: 1, max: 8, main: true },
+  { key: "kingpinToAxle", label: "キングピン→台車の軸", unit: "m", step: 1, min: 3, max: 60 },
+  { key: "bladeRootAt", label: "根元の位置（キングピンから後ろ）", unit: "m", step: 1, min: -10, max: 40 },
+  { key: "trailerWidth", label: "台車の幅", unit: "m", step: 0.1, min: 2, max: 5 },
+  { key: "trailerTail", label: "台車の軸から後端", unit: "m", step: 0.5, min: 0, max: 20 },
+  { key: "trailerFront", label: "台車の前のはみ出し", unit: "m", step: 0.5, min: 0, max: 6 },
+  { key: "tractorWheelbase", label: "トラクタの軸距", unit: "m", step: 0.1, min: 2, max: 8 },
+  { key: "tractorWidth", label: "トラクタの幅", unit: "m", step: 0.1, min: 2, max: 3.5 },
+  { key: "tractorFront", label: "トラクタの前のはみ出し", unit: "m", step: 0.1, min: 0.5, max: 3 },
+];
+
+const BAND_FIELDS: { key: keyof typeof DEFAULT_BAND; label: string }[] = [
+  { key: "marginStraight", label: "余裕幅（直線）" },
+  { key: "marginCurve", label: "余裕幅（カーブ）" },
+  { key: "cut", label: "伐採の幅（余裕幅の外へ）" },
+  { key: "roadHalf", label: "道路の半幅" },
+];
+
+function numField(name: string, label: string, value: number, unit: string, step: number, min: number, max: number): string {
+  return `<label class="field"><span>${label}（${unit}）</span><input type="number" name="${name}" value="${value}" step="${step}" min="${min}" max="${max}"></label>`;
+}
+
+function renderTrackStep(state: AppState): string {
+  const t = state.track;
+  const parts: string[] = [`<div class="track">`];
+  parts.push(`<dl class="kv"><dt>公図</dt><dd>小川村 2026年版（4枚、区間の周り ${state.parcels.length} 筆）。見本では取り込み済み</dd></dl>`);
+  parts.push(`<h4>伐採範囲の決め方 ${help(HELP.band)}</h4>`);
+  parts.push(
+    `<select class="wide" data-track-kind>
+      <option value="vehicle" ${t.source.kind === "vehicle" ? "selected" : ""}>架空の軌跡図を作る（車両の寸法から）</option>
+      <option value="file" ${t.source.kind === "file" ? "selected" : ""}>軌跡図のファイルを読む（KML・GeoJSON）</option>
+      <option value="band" ${t.source.kind === "band" ? "selected" : ""}>仮の帯（中心線から一定の幅）</option>
+    </select>`,
+  );
+  parts.push(`<form data-track-form>`);
+  if (t.source.kind === "vehicle") {
+    const v = t.source.vehicle;
+    const preset = t.source.preset;
+    parts.push(
+      `<label class="field"><span>車両の型</span></label><select class="wide" name="preset">${(Object.keys(PRESETS) as PresetId[])
+        .map((k) => `<option value="${k}" ${k === preset ? "selected" : ""}>${PRESETS[k].name}</option>`)
+        .join("")}</select>`,
+    );
+    parts.push(`<p class="muted small">${PRESETS[preset].note}。${help(HELP.vehicle)}</p>`);
+    for (const f of VEHICLE_FIELDS.filter((f) => f.main && (!f.lifterOnly || preset === "lifter"))) parts.push(numField(f.key, f.label, v[f.key] ?? v.tilt, f.unit, f.step, f.min, f.max));
+    const lhC = bladeHorizontal(v, v.tiltCurve ?? v.tilt);
+    parts.push(
+      `<p class="muted small">水平の投影 ${bladeHorizontal(v).toFixed(1)}m${lhC !== bladeHorizontal(v) ? `（曲がりで ${lhC.toFixed(1)}m）` : ""}（長さ × cos 角度）。ブレードの先は台車の軸の ${(v.bladeRootAt + bladeHorizontal(v) - v.kingpinToAxle).toFixed(1)}m 後ろ。</p>`,
+    );
+    parts.push(`<details><summary>細かい寸法（台車・トラクタ）</summary>`);
+    for (const f of VEHICLE_FIELDS.filter((f) => !f.main || (f.lifterOnly && preset !== "lifter"))) parts.push(numField(f.key, f.label, v[f.key] ?? v.tilt, f.unit, f.step, f.min, f.max));
+    parts.push(`</details>`);
+  } else if (t.source.kind === "file") {
+    parts.push(`<div class="dropzone" data-drop>ここに軌跡図（KML・GeoJSON）を落とす<br><input type="file" accept=".kml,.geojson,.json" data-track-file></div>`);
+    parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。外側線・内側線・多角形のどれでも構いません。座標はこの端末の外へ出しません。KMZ は解凍して中の KML を。</p>`);
+    if (t.source.lines.length) parts.push(`<p>読んだ：<b>${escapeHtml(t.source.name)}</b>（線 ${t.source.lines.length} 本）</p>`);
+  } else {
+    parts.push(numField("halfWidth", "中心線から外側まで", t.source.halfWidth, "m", 1, 3, 60));
+  }
+  if (t.source.kind !== "band") {
+    parts.push(`<details ${t.source.kind === "file" ? "open" : ""}><summary>余裕幅と伐採の幅</summary>`);
+    for (const f of BAND_FIELDS) parts.push(numField(`band.${f.key}`, f.label, t.band[f.key], "m", 0.5, 0, 20));
+    parts.push(`</details>`);
+  } else {
+    parts.push(numField("band.roadHalf", "道路の半幅", t.band.roadHalf, "m", 0.5, 0, 20));
+  }
+  parts.push(`<div class="actions"><button class="btn primary" type="submit">${t.source.kind === "vehicle" ? "架空の軌跡図を作る" : "この範囲で拾い直す"}</button></div>`);
+  parts.push(`</form>`);
+
+  // 結果
+  const r = state.trackResult;
+  const mx = sweepMax(r.sweep);
+  const judged = state.judgments.size;
+  parts.push(`<div class="result">`);
+  if (state.trackError) parts.push(`<div class="err">${escapeHtml(state.trackError)}</div>`);
+  parts.push(`いま：${escapeHtml(describeTrack(t))}<br>`);
+  if (t.source.kind !== "band") parts.push(`掃く幅の最大：左 ${mx.left.toFixed(1)}m・右 ${mx.right.toFixed(1)}m<br>`);
+  parts.push(`区切り ${r.segments.length}、かかる筆 <b>${state.hits.length}</b>`);
+  if (judged) parts.push(`<br><span class="muted small">判定 ${judged} 区切りはそのまま残しています。範囲を変えたあとは、手順 4 で判定し直すのが確実です。</span>`);
+  parts.push(`</div>`);
+  if (t.source.kind !== "band") {
+    parts.push(`<div class="row btns"><button class="btn small" data-save-track="kml">KML で保存</button><button class="btn small" data-save-track="geojson">GeoJSON で保存</button></div>`);
+    parts.push(`<p class="muted small">${t.source.kind === "vehicle" ? "架空の軌跡図です。本物は運送会社が専用のソフトで描きます。打ち合わせの叩き台や、軌跡図が届く前の下調べに。" : "読んだ軌跡図を、この道具の形（掃く範囲と伐採範囲の外側）で書き出します。"}</p>`);
+  }
+  parts.push(`<div class="actions"><button class="btn primary" data-go="3">次へ：かかる筆を見る</button></div>`);
+  parts.push(`</div>`);
+  return parts.join("");
+}
+
+function wireTrackStep(state: AppState, body: HTMLElement) {
+  body.querySelector<HTMLSelectElement>("[data-track-kind]")?.addEventListener("change", (e) => {
+    const kind = (e.target as HTMLSelectElement).value as TrackSetting["source"]["kind"];
+    state.trackError = null;
+    if (kind === "vehicle") state.track = { ...state.track, source: { kind, preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle } } };
+    else if (kind === "file") state.track = { ...state.track, source: { kind, name: "", lines: [] } };
+    else state.track = { ...state.track, source: { kind, halfWidth: 13 } };
+    // ファイルはまだ読んでいないので、読むまで前の範囲のまま。車両と帯はすぐ計算する
+    if (kind !== "file") rebuildTrack(state);
+    else renderStep(state);
+  });
+  const form = body.querySelector<HTMLFormElement>("[data-track-form]");
+  form?.querySelector<HTMLSelectElement>('select[name="preset"]')?.addEventListener("change", (e) => {
+    const preset = (e.target as HTMLSelectElement).value as PresetId;
+    state.track = { ...state.track, source: { kind: "vehicle", preset, vehicle: { ...PRESETS[preset].vehicle } } };
+    rebuildTrack(state);
+  });
+  form?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    // 筆の拾い直しに 1 秒ほどかかるので、押せたことが分かるようにボタンの字を変えてから計算する
+    const btn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "計算中…";
+    }
+    const fd = new FormData(form);
+    const num = (name: string, fallback: number) => {
+      const v = Number(fd.get(name));
+      return Number.isFinite(v) && fd.get(name) !== null && fd.get(name) !== "" ? v : fallback;
+    };
+    const band = { ...state.track.band };
+    for (const f of BAND_FIELDS) band[f.key] = num(`band.${f.key}`, band[f.key]);
+    let source = state.track.source;
+    if (source.kind === "vehicle") {
+      const vehicle = { ...source.vehicle };
+      for (const f of VEHICLE_FIELDS) vehicle[f.key] = num(f.key, vehicle[f.key] ?? vehicle.tilt);
+      // 伸縮トレーラーでは曲がりの角度の欄を出さない。水平（tilt 0）のまま曲がりも同じ角度にする
+      if (source.preset !== "lifter") vehicle.tiltCurve = vehicle.tilt;
+      source = { ...source, vehicle };
+    } else if (source.kind === "band") {
+      source = { ...source, halfWidth: num("halfWidth", source.halfWidth) };
+    }
+    state.track = { source, band };
+    state.trackError = null;
+    setTimeout(() => rebuildTrack(state), 20);
+  });
+  const fileInput = body.querySelector<HTMLInputElement>("[data-track-file]");
+  fileInput?.addEventListener("change", () => {
+    const f = fileInput.files?.[0];
+    if (f) readTrackFile(state, f);
+  });
+  const drop = body.querySelector<HTMLElement>("[data-drop]");
+  if (drop) {
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) readTrackFile(state, f);
+    });
+  }
+  body.querySelectorAll<HTMLButtonElement>("[data-save-track]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const fc = trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer);
+      const day = new Date().toISOString().slice(0, 10);
+      const title = `${state.roadName} ${state.track.source.kind === "vehicle" ? "架空の軌跡図" : "軌跡"}（アルクマエ）`;
+      const desc = `${describeTrack(state.track)}。アルクマエで ${day} に作成。${state.track.source.kind === "vehicle" ? "車両の寸法と道路の中心線（OpenStreetMap）から計算した架空の軌跡図で、実在の輸送計画ではありません。" : ""}現地の確認なしに使わないでください。`;
+      if (b.dataset.saveTrack === "kml") download(`arukumae_${state.roadName}_軌跡_${day}.kml`, trackKml(fc, title, desc), "application/vnd.google-earth.kml+xml");
+      else download(`arukumae_${state.roadName}_軌跡_${day}.geojson`, JSON.stringify({ ...fc, title, description: desc }), "application/geo+json");
+    }),
+  );
+}
+
+async function readTrackFile(state: AppState, f: File) {
+  try {
+    const text = await f.text();
+    const lines = parseTrackFile(f.name, text);
+    if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
+    state.track = { ...state.track, source: { kind: "file", name: f.name, lines: linesToPlane(lines) } };
+    state.trackError = null;
+    rebuildTrack(state);
+    const covered = state.trackResult.sweep.left.filter((x) => Number.isFinite(x)).length;
+    if (covered === 0) state.trackError = "読めましたが、この区間の中心線の近く（120m 以内）に線がありません。別の道の軌跡図かもしれません。";
+    else if (covered < state.dense.length * 0.5) state.trackError = `軌跡図が区間の一部（約 ${covered}m）しか覆っていません。覆っていない所は切らない扱いです。`;
+    if (state.trackError) renderStep(state);
+  } catch (e) {
+    state.trackError = (e as Error).message;
+    renderStep(state);
+  }
+}
+
+/** 伐採範囲の決め方が変わったとき、区切り・かかる筆・地図・一覧を全部作り直す */
+function rebuildTrack(state: AppState) {
+  const t0 = performance.now();
+  state.trackResult = computeTrack(state.dense, state.normals, state.track);
+  state.segments = state.trackResult.segments;
+  const hits = findHits(state.parcels, state.segments);
+  for (const h of state.hits) state.map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: false });
+  state.hits = hits;
+  state.hitById = new Map(hits.map((h) => [h.parcelId, h]));
+  for (const h of hits) state.map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
+  state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments);
+  setSourceData(state.map, "segments", state.segmentsGeo);
+  setSourceData(state.map, "hit-areas", hitsToGeoJSON(hits));
+  setSourceData(state.map, "track", trackGeo(state));
+  clearSelection(state);
+  saveTrack(TRACK_KEY, state.track);
+  renderList(state);
+  renderChecks(state);
+  renderStep(state);
+  console.info(`伐採範囲を作り直し：区切り ${state.segments.length}、かかる筆 ${hits.length}（${Math.round(performance.now() - t0)}ms）`);
+}
+
+function trackGeo(state: AppState) {
+  // 仮の帯のときは掃く範囲の面を出さない（帯そのものが区切りとして見えている）
+  if (state.track.source.kind === "band") return { type: "FeatureCollection", features: [] } as ReturnType<typeof trackGeoJSON>;
+  return trackGeoJSON(state.dense, state.normals, state.trackResult.sweep, state.trackResult.outer);
 }
 
 function renderJudgeStep(state: AppState): string {
@@ -546,6 +783,7 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
       <dt>場所</dt><dd>起点から ${f.properties!.fromM}〜${f.properties!.toM} m の${side}</dd>
       <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
       <dt>面積</dt><dd>${f.properties!.areaM2} m²</dd>
+      <dt>外側</dt><dd>中心線から ${f.properties!.outerMaxM} m まで ${help(HELP.band)}</dd>
       ${
         j
           ? `<dt>木の割合</dt><dd><b>${j.tree}%</b></dd>
@@ -680,7 +918,8 @@ function renderLegend(state: AppState) {
       sub: [["未判定", "rgba(200,200,200,0.5)"], ["0%", "rgba(255,255,255,0.6)"], ["25", "rgba(255,235,59,0.7)"], ["50", "rgba(255,152,0,0.7)"], ["75", "rgba(244,81,30,0.7)"], ["100", "rgba(183,28,28,0.7)"]]
         .map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${k}</span>`).join("") + `<span>点線＝確信が低い</span><span><i class="sw" style="border:2px solid #1565c0"></i>人が直した</span>`,
     },
-    { key: "section", label: "輸送路の中心線（架空の軌跡図の元）" },
+    { key: "track", label: "軌跡（手順 2）", sub: `<span><i class="sw" style="background:#7b1fa233;border-color:#7b1fa2"></i>掃く範囲</span><span><i class="sw" style="border-style:dashed;border-color:#ff9800;border-width:2px"></i>伐採範囲の外側</span>` },
+    { key: "section", label: "輸送路の中心線" },
     { key: "kps", label: "距離標（人が置いた。手順 6）" },
   ];
   document.getElementById("legend-body")!.innerHTML = groups

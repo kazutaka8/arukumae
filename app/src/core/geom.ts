@@ -12,8 +12,12 @@ export interface SegmentOptions {
   step: number;
   /** 道路の半幅（m）。ここから外側を区切りにする */
   roadHalf: number;
-  /** 伐採範囲の外側（中心線からの距離 m） */
-  bandOut: number;
+  /**
+   * 伐採範囲の外側（中心線からの距離 m）。
+   * 数なら全区間で一定（仮の帯）。左右別の配列なら 1m ごとの点（dense）に対応する（軌跡図・架空の軌跡図から作る）。
+   * NaN は「ここには軌跡の情報がない」で、道路の半幅と同じ（切らない）扱い
+   */
+  bandOut: number | { left: ArrayLike<number>; right: ArrayLike<number> };
 }
 
 export const DEFAULT_SEGMENT_OPTIONS: SegmentOptions = { step: 10, roadHalf: 3, bandOut: 13 };
@@ -27,6 +31,8 @@ export interface Segment {
   /** 外周。閉じている（最初と最後が同じ点） */
   ring: EN[];
   areaM2: number;
+  /** この区切りでの伐採範囲の外側の最大（中心線からの距離 m）。詳細の表示用 */
+  outerMaxM: number;
 }
 
 export function length(line: EN[]): number {
@@ -88,6 +94,11 @@ export function ringArea(ring: EN[]): number {
 export function buildSegments(dense: EN[], normals: EN[], opt: SegmentOptions = DEFAULT_SEGMENT_OPTIONS): Segment[] {
   const segs: Segment[] = [];
   const nSeg = Math.floor((dense.length - 1) / opt.step);
+  const outerAt = (side: "L" | "R", i: number): number => {
+    const raw = typeof opt.bandOut === "number" ? opt.bandOut : side === "L" ? opt.bandOut.left[i] : opt.bandOut.right[i];
+    // 情報のない所と、掃く範囲が道路の中に収まる所は「道路の端まで」＝幅 0
+    return Number.isFinite(raw) ? Math.max(raw, opt.roadHalf) : opt.roadHalf;
+  };
   for (let k = 0; k <= nSeg; k++) {
     const i0 = k * opt.step;
     const i1 = Math.min((k + 1) * opt.step, dense.length - 1);
@@ -95,11 +106,16 @@ export function buildSegments(dense: EN[], normals: EN[], opt: SegmentOptions = 
     for (const [side, sgn] of [["L", 1], ["R", -1]] as const) {
       const inner: EN[] = [];
       const outer: EN[] = [];
+      let outerMax = opt.roadHalf;
       for (let i = i0; i <= i1; i++) {
         const [nx, ny] = normals[i];
+        const o = outerAt(side, i);
+        if (o > outerMax) outerMax = o;
         inner.push([dense[i][0] + sgn * nx * opt.roadHalf, dense[i][1] + sgn * ny * opt.roadHalf]);
-        outer.push([dense[i][0] + sgn * nx * opt.bandOut, dense[i][1] + sgn * ny * opt.bandOut]);
+        outer.push([dense[i][0] + sgn * nx * o, dense[i][1] + sgn * ny * o]);
       }
+      // 伐採範囲が道路の端より外に出ない区切りは作らない（軌跡図がない所、車両が道路に収まる所）
+      if (outerMax - opt.roadHalf < 0.05) continue;
       const ring = [...inner, ...outer.reverse()];
       ring.push(ring[0]);
       segs.push({
@@ -109,6 +125,7 @@ export function buildSegments(dense: EN[], normals: EN[], opt: SegmentOptions = 
         toM: i1,
         ring,
         areaM2: ringArea(ring),
+        outerMaxM: Math.round(outerMax * 10) / 10,
       });
     }
   }
@@ -123,4 +140,50 @@ export function nearestOnLine(dense: EN[], p: EN): { dist: number; index: number
     if (d < best.dist) best = { dist: d, index: i };
   }
   return best;
+}
+
+/**
+ * 1m ごとの点を升目に入れて、最寄りの点を速く引く。
+ * 軌跡の計算では数十万点を投影するので、毎回 nearestOnLine（全点を見る）では遅い。
+ */
+export class StationIndex {
+  private cells = new Map<string, number[]>();
+  private pts: EN[];
+  private cell: number;
+  constructor(pts: EN[], cell = 25) {
+    this.pts = pts;
+    this.cell = cell;
+    pts.forEach((p, i) => {
+      const key = this.key(Math.floor(p[0] / cell), Math.floor(p[1] / cell));
+      const arr = this.cells.get(key);
+      if (arr) arr.push(i);
+      else this.cells.set(key, [i]);
+    });
+  }
+  private key(cx: number, cy: number): string {
+    return `${cx},${cy}`;
+  }
+  /** maxDist（m）より遠ければ null */
+  nearest(p: EN, maxDist = 100): { dist: number; index: number } | null {
+    const cx = Math.floor(p[0] / this.cell);
+    const cy = Math.floor(p[1] / this.cell);
+    let best = { dist: Infinity, index: -1 };
+    const rMax = Math.ceil(maxDist / this.cell) + 1;
+    for (let r = 0; r <= rMax; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // この輪だけ
+          const arr = this.cells.get(this.key(cx + dx, cy + dy));
+          if (!arr) continue;
+          for (const i of arr) {
+            const d = Math.hypot(this.pts[i][0] - p[0], this.pts[i][1] - p[1]);
+            if (d < best.dist) best = { dist: d, index: i };
+          }
+        }
+      }
+      // この輪まで見たあと、外の輪の点は少なくとも r×升 の距離にある。それより近いものが見つかっていれば終わり
+      if (best.index >= 0 && best.dist <= r * this.cell) break;
+    }
+    return best.index >= 0 && best.dist <= maxDist ? best : null;
+  }
 }

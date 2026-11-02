@@ -188,3 +188,17 @@ table.list.kps { margin-top: 8px; }
 .maplibregl-ctrl-top-right { top: 10px; right: 340px; transition: right 0.2s; }
 .detail.collapsed ~ .maplibregl-ctrl-top-right { right: 10px; }
 
+
+/* 手順 2：伐採範囲の決め方（車両の寸法・ファイル・仮の帯） */
+.track h4 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.track .field { display: grid; grid-template-columns: 1fr 5.5em; gap: 6px; align-items: center; margin: 4px 0; }
+.track .field > span { color: var(--ink); }
+.track .field input, .track .field select, .track select.wide { width: 100%; padding: 4px 6px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.track select.wide { margin-bottom: 6px; }
+.track .field input[type="number"] { text-align: right; }
+.track details { margin: 6px 0; }
+.track details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.track .result { background: #f3e5f5; border-left: 3px solid #7b1fa2; padding: 8px 10px; margin: 10px 0; border-radius: 4px; line-height: 1.6; }
+.track .result .err { color: #c62828; }
+.track .row.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.track input[type="file"] { width: 100%; font-size: 12px; }

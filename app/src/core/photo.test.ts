@@ -6,7 +6,7 @@ function fakeSegments(pairs: number): Segment[] {
   const out: Segment[] = [];
   for (let k = 0; k < pairs; k++) {
     for (const side of ["L", "R"] as const) {
-      out.push({ id: `${side}${String(k).padStart(3, "0")}`, side, fromM: k * 10, toM: k * 10 + 10, ring: [], areaM2: 100 });
+      out.push({ id: `${side}${String(k).padStart(3, "0")}`, side, fromM: k * 10, toM: k * 10 + 10, ring: [], areaM2: 100, outerMaxM: 13 });
     }
   }
   return out;
@@ -19,6 +19,14 @@ describe("windowsOf", () => {
     expect(w.map((x) => x.length)).toEqual([38, 38, 38, 38, 38, 38, 38, 24]);
     expect(w.flat().map((s) => s.id)).toEqual(fakeSegments(145).map((s) => s.id)); // 順も漏れも変わらない
     for (const x of w) expect(x.length % 2).toBe(0); // 左右がそろう
+  });
+
+  it("片側しかない所があっても、同じ距離の左右は同じ窓に入る", () => {
+    const segs = fakeSegments(30).filter((s) => !(s.side === "R" && s.fromM >= 100 && s.fromM < 200)); // 100〜200m は左だけ
+    const w = windowsOf(segs, 10);
+    expect(w).toHaveLength(3);
+    expect(w[1].map((s) => s.id)).toEqual(["L010", "L011", "L012", "L013", "L014", "L015", "L016", "L017", "L018", "L019"]);
+    expect(w[2].length).toBe(20);
   });
 
   it("20 対までなら 1 窓", () => {

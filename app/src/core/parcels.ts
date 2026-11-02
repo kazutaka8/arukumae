@@ -11,12 +11,12 @@ import { NOT_LAND, type ParcelHit, type ParcelProps } from "./types";
 export type ParcelFeature = Feature<Polygon, ParcelProps>;
 
 /** 区切りを緯度経度の GeoJSON にする（地図に出す用） */
-export function segmentsToGeoJSON(segs: Segment[]): FeatureCollection<Polygon, { id: string; side: string; fromM: number; toM: number; areaM2: number }> {
+export function segmentsToGeoJSON(segs: Segment[]): FeatureCollection<Polygon, { id: string; side: string; fromM: number; toM: number; areaM2: number; outerMaxM: number }> {
   return {
     type: "FeatureCollection",
     features: segs.map((s) => ({
       type: "Feature",
-      properties: { id: s.id, side: s.side, fromM: s.fromM, toM: s.toM, areaM2: Math.round(s.areaM2 * 10) / 10 },
+      properties: { id: s.id, side: s.side, fromM: s.fromM, toM: s.toM, areaM2: Math.round(s.areaM2 * 10) / 10, outerMaxM: s.outerMaxM },
       geometry: { type: "Polygon", coordinates: [s.ring.map((p) => toLonLat(p))] },
     })),
   };
