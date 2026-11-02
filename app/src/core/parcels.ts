@@ -56,6 +56,7 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
     let toM = -Infinity;
     const sides = new Set<"L" | "R">();
     const segmentIds: string[] = [];
+    const segAreas: Record<string, number> = {};
     const pieces: Feature<Polygon | MultiPolygon>[] = [];
     for (const { s, poly, bbox } of segPolys) {
       if (bbox[2] < minX || bbox[0] > maxX || bbox[3] < minY || bbox[1] > maxY) continue;
@@ -70,6 +71,7 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
           toM = Math.max(toM, s.toM);
           sides.add(s.side);
           segmentIds.push(s.id);
+          segAreas[s.id] = s.areaM2 / 2;
           pieces.push(poly);
         }
         continue;
@@ -83,6 +85,7 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
       toM = Math.max(toM, s.toM);
       sides.add(s.side);
       segmentIds.push(s.id);
+      segAreas[s.id] = Math.round(a * 10) / 10;
       pieces.push(inter);
     }
     if (area > 0) {
@@ -93,6 +96,7 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
         toM,
         sides: [...sides].sort() as ("L" | "R")[],
         segmentIds,
+        segAreas,
         shape: toLonLatShape(pieces),
       });
     }

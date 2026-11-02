@@ -9,7 +9,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // MapLibre 6 は自分のファイルの隣から Worker を読もうとするが、Vite が束ねると隣にない。
 // scripts/copy-worker.mjs が public/vendor/ に写したものを、手を入れない形で読む
 maplibregl.setWorkerUrl(`${import.meta.env.BASE_URL}vendor/maplibre-gl-worker.mjs`);
-import type { FeatureCollection, LineString, Polygon } from "geojson";
+import type { FeatureCollection, LineString, Point, Polygon } from "geojson";
 import type { FeatureCollection as FC, MultiPolygon } from "geojson";
 import { NOT_LAND, type Judgment, type ParcelKind } from "../core/types";
 
@@ -29,6 +29,7 @@ export const LAYER_IDS = {
   parcels: ["parcels-fill", "parcels-selected", "parcels-line", "parcels-label", "hit-areas"],
   segments: ["segments-fill", "segments-line", "segments-label"],
   section: ["section-line", "section-ends"],
+  kps: ["kps-point", "kps-label"],
 } as const;
 
 export type LayerGroup = keyof typeof LAYER_IDS;
@@ -186,8 +187,9 @@ export function addSegments(map: MlMap, segments: FeatureCollection<Polygon>) {
     type: "line",
     source: "segments",
     paint: {
-      "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#ff3b30", ["==", ["get", "side"], "L"], "#ffe600", "#00dcff"],
-      "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, 1],
+      // 人が直した区切りは青い太枠。誰が決めたかを地図でも見分けるため（spec F10）
+      "line-color": ["case", ["boolean", ["feature-state", "selected"], false], "#ff3b30", ["==", ["get", "by"], "人"], "#1565c0", ["==", ["get", "side"], "L"], "#ffe600", "#00dcff"],
+      "line-width": ["case", ["boolean", ["feature-state", "selected"], false], 3, ["==", ["get", "by"], "人"], 2.5, 1],
       "line-dasharray": ["case", ["==", ["get", "conf"], "低"], ["literal", [2, 2]], ["literal", [1, 0]]],
     },
   });
@@ -210,6 +212,24 @@ export function applyJudgments(segments: FeatureCollection<Polygon>, judgments: 
       return j ? { ...f, properties: { ...f.properties, tree: j.tree, conf: j.conf, by: j.by } } : f;
     }),
   };
+}
+
+/** 距離標（人が置いたもの）。白地に赤い縁の丸と「KP 12.0」の札 */
+export function addKps(map: MlMap, kps: FeatureCollection<Point>) {
+  map.addSource("kps", { type: "geojson", data: kps });
+  map.addLayer({
+    id: "kps-point",
+    type: "circle",
+    source: "kps",
+    paint: { "circle-radius": 7, "circle-color": "#fff", "circle-stroke-color": "#c62828", "circle-stroke-width": 3 },
+  });
+  map.addLayer({
+    id: "kps-label",
+    type: "symbol",
+    source: "kps",
+    layout: { "text-field": ["get", "label"], "text-size": 12, "text-offset": [0, -1.4], "text-font": ["NotoSansCJKjp-Bold"], "text-allow-overlap": true },
+    paint: { "text-color": "#c62828", "text-halo-color": "#fff", "text-halo-width": 2 },
+  });
 }
 
 export function setGroupVisible(map: MlMap, group: LayerGroup, visible: boolean) {

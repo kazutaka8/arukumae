@@ -128,6 +128,19 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tree-bar { display: inline-block; width: 36px; height: 8px; border-radius: 2px; background: #eceff1; vertical-align: middle; overflow: hidden; }
 .tree-bar i { display: block; height: 100%; background: #2e7d32; }
 
+/* 判定を直すフォーム（詳細の中） */
+.fix { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.fix summary { cursor: pointer; font-weight: 600; }
+.fix form { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.fix .field { display: grid; grid-template-columns: 5em 1fr; gap: 6px; align-items: center; }
+.fix .field > span { color: var(--muted); }
+.fix .radios { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.fix .radios label { display: inline-flex; align-items: center; gap: 2px; }
+.fix select, .fix input[name="why"] { width: 100%; padding: 4px 6px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.fix .row.end { gap: 8px; }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+table.list.kps { margin-top: 8px; }
+
 /* 判定の進み具合 */
 .progress { height: 6px; background: #eceff1; border-radius: 3px; overflow: hidden; margin: 6px 0; }
 .progress i { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }

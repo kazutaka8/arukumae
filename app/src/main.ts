@@ -1,23 +1,28 @@
 /**
  * アルクマエの入口。見本のデータを読み、地図とパネルを組む。
- * 手順 1・3・4・5 を触れる。2（取り込み）・5 の「直す」・6（KP）・7（書き出し）はまだ骨。
+ * 手順 1・3〜7 を触れる。2（取り込み）と 7 の PDF はまだ骨。
  */
 import "./style.css";
-import type { FeatureCollection, Polygon, Position } from "geojson";
+import type { FeatureCollection, Point, Polygon, Position } from "geojson";
 import type { LngLatBoundsLike, MapGeoJSONFeature, Map as MlMap, GeoJSONSource } from "maplibre-gl";
-import { buildSegments, leftNormals, resample, type Segment } from "./core/geom";
+import { buildRows, download, toCsv } from "./core/export";
+import { buildSegments, leftNormals, nearestOnLine, resample, type Segment } from "./core/geom";
+import { estimateKp, fmtKm, formatKp, type KpMark } from "./core/kp";
 import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
 import { renderWindow, windowsOf } from "./core/photo";
-import { toPlane, type EN } from "./core/proj";
-import { NOT_LAND, type Judgment, type ParcelHit, type ParcelKind } from "./core/types";
+import { toLonLat, toPlane, type EN } from "./core/proj";
+import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
-import { addParcels, addSection, addSegments, applyJudgments, createMap, KIND_COLORS, setGroupVisible, type LayerGroup } from "./map/map";
+import { addKps, addParcels, addSection, addSegments, applyJudgments, createMap, KIND_COLORS, setGroupVisible, type LayerGroup } from "./map/map";
 import { buildLayout, escapeHtml, help, leftCover, openDetail, renderSteps, rightCover, showListTab, STEPS } from "./ui/panels";
 
 interface AppState {
   map: MlMap;
   step: number;
+  /** 中心線を 1m ごとに打ち直した点。添字＝起点からの距離（m） */
+  dense: EN[];
+  roadName: string;
   segments: Segment[];
   segmentsGeo: FeatureCollection<Polygon>;
   parcels: ParcelFeature[];
@@ -30,12 +35,17 @@ interface AppState {
   selectedSegment: string | null;
   /** 「確かめる所」の何番目を見ているか（-1 はまだ）。手順 5 の前へ・次へと一覧の行で動く */
   lowCursor: number;
+  /** 人が置いた距離標（F9） */
+  kps: KpMark[];
+  /** 「地図を押して距離標を置く」の最中か */
+  placingKp: boolean;
   /** 判定の進み具合。null なら動いていない */
   run: { done: number; total: number; usd: number; log: string[]; cancel: boolean } | null;
 }
 
 // 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
 const JUDGMENTS_KEY = "arukumae.judgments.ogawa";
+const KPS_KEY = "arukumae.kps.ogawa";
 
 async function main() {
   const root = document.getElementById("app")!;
@@ -60,6 +70,8 @@ async function main() {
   const state: AppState = {
     map,
     step: 3,
+    dense,
+    roadName: section.features[0].properties.road_name,
     segments,
     segmentsGeo,
     parcels,
@@ -71,6 +83,8 @@ async function main() {
     selectedParcel: null,
     selectedSegment: null,
     lowCursor: -1,
+    kps: loadJson<KpMark[]>(KPS_KEY) ?? [],
+    placingKp: false,
     run: null,
   };
 
@@ -81,6 +95,7 @@ async function main() {
     addParcels(map, parcelsFc, hitsToGeoJSON(hits));
     addSegments(map, segmentsGeo);
     addSection(map, section);
+    addKps(map, kpsGeo(state));
     for (const h of hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
     wireMapClicks(state);
     renderLegend(state);
@@ -99,6 +114,8 @@ const HELP = {
   judged: "判定が付いている区切りの数。見本として最初から入っている Claude の判定、この道具から Claude に判定させたもの、人が直したものを合わせた数です。",
   check: "確かめる所：Claude の確信が「低」だった区切り。写真がぼやける・影で見えない・枠の位置が読みにくい、などの理由です。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
+  kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
+  fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
 
 /* ---------- 手順 ---------- */
@@ -143,12 +160,41 @@ function renderStep(state: AppState) {
       showListTab("checks");
       break;
     }
-    case 6:
-      parts.push(`<p class="muted">まだ置けません。</p><div class="actions"><button class="btn primary" data-go="7">次へ：書き出し</button></div>`);
+    case 6: {
+      const marks = [...state.kps].sort((a, b) => a.atM - b.atM);
+      parts.push(`<p>読んだ距離標 ${help(HELP.kp)} を地図に置くと、全部の区切りと筆に「${escapeHtml(state.roadName)} ○.○○km 付近（推定）」が付きます。2 本以上要ります。</p>`);
+      parts.push(
+        `<div class="actions"><button class="btn ${state.placingKp ? "" : "primary"}" data-place-kp>${state.placingKp ? "やめる（地図を押すと距離標が入ります）" : "地図を押して距離標を置く"}</button></div>`,
+      );
+      if (marks.length) {
+        parts.push(
+          `<table class="list kps"><thead><tr><th>起点から m</th><th>KP（km）</th><th></th></tr></thead><tbody>` +
+            marks.map((m, i) => `<tr><td class="num">${m.atM}</td><td class="num">${fmtKm(m.kp)}</td><td><button class="btn small" data-del-kp="${i}">消す</button></td></tr>`).join("") +
+            `</tbody></table>`,
+        );
+      } else {
+        parts.push(`<p class="muted small">まだ 1 本も置いていません。</p>`);
+      }
+      if (marks.length >= 2) {
+        const a = estimateKp(marks, 0)!;
+        const b = estimateKp(marks, state.segments.at(-1)!.toM)!;
+        parts.push(`<div class="next">起点 ${fmtKm(a.kp)}km → 終点 ${fmtKm(b.kp)}km（推定）。距離標の外側は外挿です。</div>`);
+      } else if (marks.length === 1) {
+        parts.push(`<div class="next">あと 1 本置くと、補間できます。</div>`);
+      }
+      parts.push(`<p class="muted small">ストリートビューは人が見て読むだけにしています（画像を取り込んだり Claude に読ませたりはしません）。距離標と実際の距離は改築などでずれていることがあります。</p>`);
+      parts.push(`<div class="actions"><button class="btn primary" data-go="7">次へ：書き出し</button></div>`);
       break;
-    case 7:
-      parts.push(`<div class="actions"><button class="btn" disabled>一覧表（CSV）</button><button class="btn" disabled>一覧表（Excel）</button><button class="btn" disabled>持って歩く地図（PDF）</button></div><p class="muted small">まだ書き出せません。</p>`);
+    }
+    case 7: {
+      const noKp = state.kps.length < 2;
+      const judged = state.judgments.size;
+      parts.push(`<p>かかる筆 <b>${state.hits.length}</b> 行の一覧表です。${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りが ${state.segments.length - judged} あり、その分の木の面積は数えません。` : ""}</p>`);
+      parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button><button class="btn" disabled>持って歩く地図（PDF）— まだ</button></div>`);
+      parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・決めたのは・備考。森林の区域と届出の目印の列は、あとで足します。</p>`);
+      showListTab("hits");
       break;
+    }
   }
   body.innerHTML = parts.join("");
   body.querySelectorAll<HTMLButtonElement>("[data-go]").forEach((b) =>
@@ -158,6 +204,25 @@ function renderStep(state: AppState) {
     }),
   );
   body.querySelector("[data-next-low]")?.addEventListener("click", () => stepLow(state, 1));
+  body.querySelector("[data-place-kp]")?.addEventListener("click", () => {
+    state.placingKp = !state.placingKp;
+    state.map.getCanvas().style.cursor = state.placingKp ? "crosshair" : "";
+    renderStep(state);
+  });
+  body.querySelectorAll<HTMLButtonElement>("[data-del-kp]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const marks = [...state.kps].sort((a, b) => a.atM - b.atM);
+      marks.splice(Number(b.dataset.delKp), 1);
+      state.kps = marks;
+      refreshKps(state);
+      renderStep(state);
+    }),
+  );
+  body.querySelector("[data-csv]")?.addEventListener("click", () => {
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName);
+    const day = new Date().toISOString().slice(0, 10);
+    download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
+  });
   body.querySelector("[data-prev-low]")?.addEventListener("click", () => stepLow(state, -1));
   body.querySelector("[data-judge]")?.addEventListener("click", () => runJudging(state));
   body.querySelector("[data-cancel]")?.addEventListener("click", () => {
@@ -346,6 +411,7 @@ function renderChecks(state: AppState) {
 function wireMapClicks(state: AppState) {
   const { map } = state;
   map.on("click", (e) => {
+    if (state.placingKp) return placeKp(state, [e.lngLat.lng, e.lngLat.lat]);
     // 区切りの上では区切りを優先。筆は、地区外・別図でないものを優先する（地区外の区画は隣の地図の筆を丸ごと覆っているため）
     const seg = map.queryRenderedFeatures(e.point, { layers: ["segments-fill"] })[0];
     if (seg) return selectSegment(state, seg.properties.id as string, false);
@@ -356,6 +422,61 @@ function wireMapClicks(state: AppState) {
   for (const layer of ["segments-fill", "parcels-fill"]) {
     map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
+  }
+}
+
+/** 押した所を中心線に投影して距離標を置き、値を聞く（spec §8.6） */
+function placeKp(state: AppState, lonLat: [number, number]) {
+  const near = nearestOnLine(state.dense, toPlane(lonLat));
+  if (near.dist > 60) {
+    alert("中心線から離れすぎています（60m 以上）。道路の近くを押してください。");
+    return;
+  }
+  const raw = prompt(`起点から ${near.index}m の所に距離標を置きます。距離標に書いてある値（km）を入れてください。例：12.3`);
+  if (raw === null) return;
+  const kp = Number(raw.replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(kp) || raw.trim() === "") {
+    alert("数字で入れてください（例：12.3）");
+    return;
+  }
+  state.kps = [...state.kps.filter((m) => m.atM !== near.index), { atM: near.index, kp }];
+  state.placingKp = false;
+  state.map.getCanvas().style.cursor = "";
+  refreshKps(state);
+  renderStep(state);
+}
+
+function kpsGeo(state: AppState): FeatureCollection<Point> {
+  return {
+    type: "FeatureCollection",
+    features: state.kps.map((m) => ({
+      type: "Feature",
+      properties: { label: `KP ${fmtKm(m.kp)}`, atM: m.atM },
+      geometry: { type: "Point", coordinates: toLonLat(state.dense[Math.min(m.atM, state.dense.length - 1)]) },
+    })),
+  };
+}
+
+function refreshKps(state: AppState) {
+  (state.map.getSource("kps") as GeoJSONSource | undefined)?.setData(kpsGeo(state));
+  localStorage.setItem(KPS_KEY, JSON.stringify(state.kps));
+  renderList(state);
+  if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
+  else if (state.selectedParcel) selectParcel(state, state.selectedParcel, false);
+}
+
+/** 起点からの距離 m の KP の表示。距離標が足りなければ空 */
+function kpText(state: AppState, m: number): string {
+  const est = estimateKp(state.kps, m);
+  return est ? `${escapeHtml(formatKp(state.roadName, est))}<br><span class="muted small">${est.basis}</span>` : `<span class="muted">距離標を 2 本以上置くと出ます（手順 6）</span>`;
+}
+
+function loadJson<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -398,6 +519,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
       <dt>かかる</dt><dd>${h ? `はい。${h.areaM2} m²` : "いいえ"}</dd>
       ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
       ${h ? `<dt>木（推定）</dt><dd>${tree ? `最大 ${tree.tree}%（${tree.n} 区切り）` : '<span class="muted">まだ判定していません</span>'}</dd>` : ""}
+      ${h ? `<dt>KP（推定）</dt><dd>${kpText(state, (h.fromM + h.toM) / 2)}</dd>` : ""}
       <dt>地図</dt><dd>${p.properties.map}</dd>
     </dl>
     <p class="muted small" style="margin-top:10px">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p>`,
@@ -422,6 +544,7 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
     `区切り ${id}`,
     `<dl class="kv">
       <dt>場所</dt><dd>起点から ${f.properties!.fromM}〜${f.properties!.toM} m の${side}</dd>
+      <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
       <dt>面積</dt><dd>${f.properties!.areaM2} m²</dd>
       ${
         j
@@ -435,9 +558,68 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
           : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
       }
     </dl>
-    <div class="actions" style="margin-top:12px"><button class="btn" disabled>この区切りを直す（まだ）</button></div>`,
+    ${fixForm(j)}`,
   );
+  wireFixForm(state, id);
   if (fly) flyTo(state, boundsOf(f.geometry.coordinates[0]));
+}
+
+const TREE_KINDS: TreeKind[] = ["針葉樹", "広葉樹", "混じる", "分からない", "なし"];
+const CONFS: Confidence[] = ["高", "中", "低"];
+
+/** 区切りの判定を人が直すフォーム（F10）。開いたときは今の値が入っている。
+ * 確信だけは「高」を初期値にする：人が目で確かめて記録するのだから、Claude の「低」を引き継ぐと「確かめる所」に残り続けるため */
+function fixForm(j: Judgment | undefined): string {
+  const tree = j?.tree ?? 0;
+  return `<details class="fix" ${j?.by === "人" ? "open" : ""}>
+    <summary>この区切りを直す ${help(HELP.fix)}</summary>
+    <form data-fix>
+      <div class="field"><span>木の割合</span><div class="radios">${[0, 25, 50, 75, 100].map((v) => `<label><input type="radio" name="tree" value="${v}" ${v === tree ? "checked" : ""}>${v}%</label>`).join("")}</div></div>
+      <div class="field"><span>樹種</span><select name="kind">${TREE_KINDS.map((k) => `<option ${k === (j?.kind ?? "なし") ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div class="field"><span>確信</span><select name="conf">${CONFS.map((c) => `<option ${c === (j?.by === "人" ? j.conf : "高") ? "selected" : ""}>${c}</option>`).join("")}</select></div>
+      <div class="field"><span>メモ</span><input name="why" value="${escapeHtml(j?.by === "人" ? j.why : "")}" placeholder="現地で見た、など"></div>
+      <div class="row end"><button class="btn primary" type="submit">人の判定として記録する</button>${j?.prev ? `<button class="btn" type="button" data-undo-fix>元に戻す</button>` : ""}</div>
+    </form>
+  </details>`;
+}
+
+function stripPrev(j: Judgment): Omit<Judgment, "prev"> {
+  const { prev: _prev, ...rest } = j;
+  return rest;
+}
+
+function wireFixForm(state: AppState, id: string) {
+  const form = document.querySelector<HTMLFormElement>("#detail-body form[data-fix]");
+  if (!form) return;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const old = state.judgments.get(id);
+    const fixed: Judgment = {
+      segmentId: id,
+      tree: Number(fd.get("tree")),
+      kind: fd.get("kind") as TreeKind,
+      other: old?.other ?? [],
+      conf: fd.get("conf") as Confidence,
+      why: String(fd.get("why") ?? "").trim() || "人が直した",
+      by: "人",
+      // 直す前の判定は 1 つだけ覚える（人が何度直しても、戻る先は Claude の判定）
+      prev: old ? (old.by === "人" && old.prev ? old.prev : stripPrev(old)) : undefined,
+    };
+    state.judgments.set(id, fixed);
+    refreshJudgments(state);
+    renderChecks(state);
+    if (state.step === 5) renderStep(state);
+    selectSegment(state, id, false);
+  });
+  form.querySelector("[data-undo-fix]")?.addEventListener("click", () => {
+    const cur = state.judgments.get(id);
+    if (!cur?.prev) return;
+    state.judgments.set(id, { ...cur.prev });
+    refreshJudgments(state);
+    if (state.step === 5) renderStep(state);
+    selectSegment(state, id, false);
+  });
 }
 
 function shortModel(m: string): string {
@@ -496,9 +678,10 @@ function renderLegend(state: AppState) {
       key: "segments",
       label: "区切り（木の判定）",
       sub: [["未判定", "rgba(200,200,200,0.5)"], ["0%", "rgba(255,255,255,0.6)"], ["25", "rgba(255,235,59,0.7)"], ["50", "rgba(255,152,0,0.7)"], ["75", "rgba(244,81,30,0.7)"], ["100", "rgba(183,28,28,0.7)"]]
-        .map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${k}</span>`).join("") + `<span>点線＝確信が低い</span>`,
+        .map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${k}</span>`).join("") + `<span>点線＝確信が低い</span><span><i class="sw" style="border:2px solid #1565c0"></i>人が直した</span>`,
     },
     { key: "section", label: "輸送路の中心線（架空の軌跡図の元）" },
+    { key: "kps", label: "距離標（人が置いた。手順 6）" },
   ];
   document.getElementById("legend-body")!.innerHTML = groups
     .map((g) => `<label><input type="checkbox" data-group="${g.key}" checked> ${g.label}</label>${g.sub ? `<div class="sub">${g.sub}</div>` : ""}`)

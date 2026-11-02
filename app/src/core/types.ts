@@ -36,6 +36,8 @@ export interface Judgment {
   model?: string;
   /** 見直しのモデルが見たとき、最初の判定が何だったか（違いを見せるため） */
   before?: { tree: number; conf: Confidence; model?: string };
+  /** 人が直す前の判定（F10）。「元に戻す」に使う。入れ子にはしない（直す前の prev は持たない） */
+  prev?: Omit<Judgment, "prev">;
 }
 
 /** 軌跡・伐採範囲にかかる筆（F5） */
@@ -49,6 +51,8 @@ export interface ParcelHit {
   sides: ("L" | "R")[];
   /** 重なる区切り。筆の「木（推定）」はこの区切りの判定から出す */
   segmentIds: string[];
+  /** 区切りごとの重なる面積（m²）。木のある面積（推定）＝Σ 面積×木の割合 に使う */
+  segAreas: Record<string, number>;
   /** 重なる部分の形（緯度経度）。地図ではこの形だけを濃い黄色にする */
   shape: MultiPolygon;
 }
