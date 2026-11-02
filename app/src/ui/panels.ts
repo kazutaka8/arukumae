@@ -3,6 +3,7 @@
  * 左のパネルは「手順の列」と「一覧の列」の2列。一覧の列は手順の右に縦に出し、幅をドラッグで変えられる。
  * 下の引き出しだと、飛んだ先の筆を一覧が隠してしまった（2026-11-02 に触ってもらって分かった）。
  * 一覧の列は「かかる筆」「確かめる所」のタブで切り替える。確かめる所が何か所あって今どこかが分かるように。
+ * タブの下の絞り込み（チップと検索欄）はここに置いたまま、中身は main.ts が入れる。検索欄を書き換えると打っている途中で焦点が外れるため。
  * ここでは DOM を組むだけにし、中身の書き換えは main.ts から呼ぶ。
  */
 
@@ -51,6 +52,14 @@ export function buildLayout(root: HTMLElement) {
           <div class="tabs" role="tablist">
             <button class="tab active" data-tab="hits" role="tab">かかる筆 <span class="count" id="list-count"></span></button>
             <button class="tab" data-tab="checks" role="tab">確かめる所 <span class="count" id="check-count"></span></button>
+          </div>
+          <div class="filters" data-tab-body="hits">
+            <div class="chips" id="hit-chips"></div>
+            <div class="filter-row"><input type="search" id="hit-q" placeholder="地番・所在で探す" autocomplete="off" aria-label="地番・所在で探す"><span class="shown" id="hit-shown"></span></div>
+          </div>
+          <div class="filters" data-tab-body="checks" hidden>
+            <div class="chips" id="check-chips"></div>
+            <span class="shown" id="check-shown"></span>
           </div>
           <div class="list-body" id="list-body" data-tab-body="hits"></div>
           <div class="list-body" id="check-body" data-tab-body="checks" hidden></div>

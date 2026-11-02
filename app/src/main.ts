@@ -1,6 +1,6 @@
 /**
  * アルクマエの入口。見本のデータを読み、地図とパネルを組む。
- * 手順 1・3〜7 を触れる。2（取り込み）と 7 の PDF はまだ骨。
+ * 手順 1〜7 を全部触れる。状態（AppState）はここに 1 つ置き、計算は core/、地図は map/、骨組みは ui/ に分ける。
  */
 import "./style.css";
 import type { FeatureCollection, Point, Polygon, Position } from "geojson";
@@ -19,6 +19,8 @@ import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type T
 import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
 import { listChecks, type Check } from "./core/checks";
+import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
+import { buildProject, describeProject, parseProject, projectFileName, type ProjectFile } from "./core/project";
 import { countNotes, NOTE_RESULTS, noteText, pruneNotes, type FieldNote, type NoteResult } from "./core/notes";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
@@ -76,6 +78,12 @@ interface AppState {
   parcelError: string | null;
   /** 現地の記録（持ち運びモード）。区切りごとの○△×とメモ。この端末に残す */
   notes: Map<string, FieldNote>;
+  /** 案件名（人が付ける）。案件ファイルの名前と画面の上に出す */
+  name: string;
+  /** 案件ファイルの保存・読み込みの結果。手順 1 に出す */
+  projectMsg: { text: string; error: boolean } | null;
+  /** 一覧の絞り込み。地図は絞らない（filter.ts） */
+  filter: { hits: HitFilter; q: string; checks: CheckFilter };
 }
 
 interface ParcelSource {
@@ -101,6 +109,8 @@ const KPS_KEY = "arukumae.kps.ogawa";
 const TRACK_KEY = "arukumae.track.ogawa";
 const PARCELS_KEY = "arukumae.parcels.ogawa";
 const NOTES_KEY = "arukumae.notes.ogawa";
+const NAME_KEY = "arukumae.name.ogawa";
+const DEFAULT_NAME = "小川村 県道401号（見本）";
 /** 公図から残す幅：区間の両側（m）。前処理（tools/cut_parcels.py）と同じ */
 const PARCEL_BUFFER_M = 200;
 
@@ -168,6 +178,9 @@ async function main() {
     parcelRun: null,
     parcelError: null,
     notes: new Map((loadJson<FieldNote[]>(NOTES_KEY) ?? []).map((n) => [n.segmentId, n])),
+    name: localStorage.getItem(NAME_KEY) || DEFAULT_NAME,
+    projectMsg: null,
+    filter: { hits: "all", q: "", checks: "all" },
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
@@ -184,12 +197,13 @@ async function main() {
     renderLegend(state);
   });
 
-  document.getElementById("project-name")!.textContent = `${section.features[0].properties.road_name}（見本）`;
+  showName(state);
   loadForest(state);
   renderStep(state);
   renderList(state);
   renderChecks(state);
   wireSettings(state);
+  wireFilters(state);
 }
 
 const HELP = {
@@ -211,6 +225,9 @@ const HELP = {
     "現地マップ：この道具の結果を KML（Google Earth など）や GeoJSON（QGIS など）で持ち出すもの。かかる筆はかかる部分の形、区切りは判定の色（白 0% → 黄 25% → 橙 50% → 赤 75〜100%）、確かめる所は赤い印。押すと所在・地番・面積・KP・判定の理由が吹き出しで出ます。航空写真は入っていません（Google Earth の写真の上に重ねます）。座標は端末の中で作るだけで、外へは送りません。",
   mojxml:
     "地図XML：法務省が無料で公開している公図の電子データ（登記所備付地図データ）の形式。G空間情報センターから市町村ごとの zip で配られ、中に地図ごとの zip と XML が入っています。公共座標系の地図はそのまま重なります。任意座標系の地図（筆の半分以上がこれ）は図面の中だけの座標なので、位置を合わせないと重なりません。この道具はまだ位置合わせに対応していないので、読み飛ばして枚数だけ伝えます。",
+  project:
+    "案件ファイル：この端末に残しているもの（伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録・案件名）を 1 つの JSON にまとめたもの。事務所の PC で判定して保存し、iPad に送って読み込めば続きができます。現地で記録したら、また保存して PC に戻します。軌跡図の座標が入るので、利用者の手元に置くファイルです。道具が外へ送ることはありません。",
+  filter: "絞り込み：一覧だけを絞ります。地図はそのままです（行を押せば地図が飛びます）。地番・所在の文字での検索は、種類と重ねられます。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
 
@@ -226,7 +243,12 @@ function renderStep(state: AppState) {
   const parts: string[] = [`<h3>${s.n}. ${s.title}</h3><p>${s.hint}</p>`];
   switch (state.step) {
     case 1:
-      parts.push(`<dl class="kv"><dt>案件名</dt><dd>小川村 県道401号（見本）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${state.dense.length - 1} m</dd><dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`);
+      parts.push(`<dl class="kv"><dt>案件名</dt><dd><input class="text" data-name value="${escapeHtml(state.name)}" maxlength="60" aria-label="案件名"></dd><dt>道路</dt><dd>${escapeHtml(state.roadName)}（見本の区間）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${state.dense.length - 1} m</dd><dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`);
+      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">案件ファイル ${help(HELP.project)}</h4>`);
+      parts.push(`<div class="actions"><button class="btn" data-project-save>案件を保存する（JSON）</button></div>`);
+      parts.push(`<div class="dropzone" data-project-drop>ここに案件ファイル（.json）を落とすと、別の端末の続きができます<br><input type="file" accept=".json,application/json" data-project-file></div>`);
+      if (state.projectMsg) parts.push(`<p class="small ${state.projectMsg.error ? "err" : ""}">${escapeHtml(state.projectMsg.text)}</p>`);
+      parts.push(`<p class="muted small">中身は、この端末に残しているものと同じです（伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録）。読み込むと、この端末のものはファイルの中身に置き換わります。</p>`);
       parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。公図は法務省の地図XML の zip をそのまま落とせます（見本では取り込み済み）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</div>`);
       parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
       break;
@@ -250,8 +272,11 @@ function renderStep(state: AppState) {
       const reviewed = [...state.judgments.values()].filter((j) => j.before);
       const forestN = lows.filter((c) => c.kind === "森林").length;
       parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN}・森林の区域と食い違う ${forestN}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
-      const pos = state.lowCursor >= 0 && state.lowCursor < lows.length ? `${state.lowCursor + 1} / ${lows.length}` : `— / ${lows.length}`;
-      parts.push(`<div class="nav"><button class="btn" data-prev-low ${lows.length ? "" : "disabled"}>← 前</button><span class="pos">${pos}</span><button class="btn" data-next-low ${lows.length ? "" : "disabled"}>次 →</button></div>`);
+      // 前へ・次へは、一覧で絞り込んだ中を回る。現地で「まだ見ていない所」だけを順に回れるように
+      const vis = visibleChecks(state);
+      const narrowed = vis.length !== lows.length ? `（絞り込み ${help(HELP.filter)}）` : "";
+      const pos = state.lowCursor >= 0 && state.lowCursor < vis.length ? `${state.lowCursor + 1} / ${vis.length}${narrowed}` : `— / ${vis.length}${narrowed}`;
+      parts.push(`<div class="nav"><button class="btn" data-prev-low ${vis.length ? "" : "disabled"}>← 前</button><span class="pos">${pos}</span><button class="btn" data-next-low ${vis.length ? "" : "disabled"}>次 →</button></div>`);
       {
         const c = countNotes(state.notes, lows.map((l) => l.segmentId));
         parts.push(`<p class="small">現地の記録 ${help(HELP.notes)}：確かめる所 ${lows.length} のうち <b>${c.checksDone}</b> を見た（○ ${c.byResult["○"]}・△ ${c.byResult["△"]}・× ${c.byResult["×"]}。ほかの区切りも含めて ${c.total} 件）。${c.byResult["×"] ? "× の区切りは「この区切りを直す」で判定を直してください。" : ""}</p>`);
@@ -311,6 +336,7 @@ function renderStep(state: AppState) {
     }
   }
   body.innerHTML = parts.join("");
+  if (state.step === 1) wireProjectStep(state, body);
   if (state.step === 2) wireTrackStep(state, body);
   body.querySelectorAll<HTMLButtonElement>("[data-go]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -734,6 +760,108 @@ function wireParcelStep(state: AppState, body: HTMLElement) {
   });
 }
 
+/* ---------- 手順 1：案件名と案件ファイル ---------- */
+
+function showName(state: AppState) {
+  document.getElementById("project-name")!.textContent = state.name;
+  document.title = `${state.name} — アルクマエ`;
+}
+
+function wireProjectStep(state: AppState, body: HTMLElement) {
+  const name = body.querySelector<HTMLInputElement>("[data-name]");
+  name?.addEventListener("change", () => {
+    state.name = name.value.trim() || DEFAULT_NAME;
+    name.value = state.name;
+    localStorage.setItem(NAME_KEY, state.name);
+    showName(state);
+  });
+  body.querySelector("[data-project-save]")?.addEventListener("click", () => saveProjectFile(state));
+  const input = body.querySelector<HTMLInputElement>("[data-project-file]");
+  input?.addEventListener("change", () => {
+    const f = input.files?.[0];
+    if (f) readProjectFile(state, f);
+  });
+  const drop = body.querySelector<HTMLElement>("[data-project-drop]");
+  if (drop) {
+    drop.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) readProjectFile(state, f);
+    });
+  }
+}
+
+function saveProjectFile(state: AppState) {
+  const s = state.parcelSource;
+  const p = buildProject({
+    name: state.name,
+    roadName: state.roadName,
+    track: state.track,
+    parcels: s.fromFile ? { fileName: s.fileName ?? "", maps: s.maps, skipped: s.skipped, features: state.parcels } : null,
+    judgments: [...state.judgments.values()],
+    kps: state.kps,
+    notes: pruneNotes(state.notes),
+  });
+  const text = JSON.stringify(p);
+  const day = new Date().toISOString().slice(0, 10);
+  download(projectFileName(state.name, day), text, "application/json");
+  state.projectMsg = { text: `保存しました（${(text.length / 1e6).toFixed(1)} MB）：${describeProject(p)}`, error: false };
+  renderStep(state);
+}
+
+async function readProjectFile(state: AppState, f: File) {
+  try {
+    const p = parseProject(await f.text());
+    // いまは見本の区間だけなので、別の道路の案件は判定が区切りと合わない。読まずに伝える
+    if (p.roadName && p.roadName !== state.roadName) throw new Error(`別の区間（${p.roadName}）の案件です。この道具はいま ${state.roadName} の見本の区間だけを扱います`);
+    applyProject(state, p);
+  } catch (e) {
+    state.projectMsg = { text: `${f.name} を読めませんでした：${(e as Error).message}`, error: true };
+    renderStep(state);
+  }
+}
+
+/** 案件ファイルの中身で、この端末のものを置き換える。残す先（localStorage）も同じにし、開き直しても続く */
+function applyProject(state: AppState, p: ProjectFile) {
+  state.name = p.name || DEFAULT_NAME;
+  localStorage.setItem(NAME_KEY, state.name);
+  showName(state);
+  state.track = p.track;
+  state.trackError = null;
+  state.judgments = new Map(p.judgments.map((j) => [j.segmentId, j]));
+  saveJudgments(state);
+  state.kps = p.kps;
+  state.notes = new Map(p.notes.map((n) => [n.segmentId, n]));
+  saveNotes(state);
+  state.projectMsg = { text: `読み込みました：${describeProject(p)}`, error: false };
+  state.parcelError = null;
+  if (p.parcels) {
+    let persisted = true;
+    try {
+      localStorage.setItem(PARCELS_KEY, JSON.stringify({ fileName: p.parcels.fileName, maps: p.parcels.maps as MapReport[], skipped: p.parcels.skipped, features: p.parcels.features } satisfies SavedParcels));
+    } catch {
+      persisted = false;
+      localStorage.removeItem(PARCELS_KEY);
+    }
+    state.parcelSource = { fromFile: true, fileName: p.parcels.fileName, maps: p.parcels.maps as MapReport[], skipped: p.parcels.skipped, persisted };
+    applyParcels(state, p.parcels.features);
+  } else {
+    localStorage.removeItem(PARCELS_KEY);
+    state.parcelSource = { fromFile: false, fileName: null, maps: [], skipped: [], persisted: true };
+    applyParcels(state, state.demoParcels);
+  }
+  // applyParcels → rebuildTrack が区切り・かかる筆・一覧・手順を作り直す。距離標は別の源なのでここで
+  refreshKps(state);
+  state.step = 1;
+  renderStep(state);
+}
+
 /** 公図のファイルをワーカーで読み、区間の周りの筆に入れ替える */
 function importParcels(state: AppState, file: File) {
   if (state.parcelRun) return;
@@ -989,8 +1117,13 @@ function checkList(state: AppState): Check[] {
   return listChecks(state.segments, state.judgments, state.forestFlags);
 }
 
+/** 一覧に出ている確かめる所（絞り込み後）。前へ・次へと一覧の番号はこちらで数える */
+function visibleChecks(state: AppState): Check[] {
+  return filterChecks(checkList(state), state.filter.checks, state.notes);
+}
+
 function stepLow(state: AppState, dir: 1 | -1) {
-  const lows = checkList(state);
+  const lows = visibleChecks(state);
   if (!lows.length) return;
   state.lowCursor = (state.lowCursor + dir + lows.length) % lows.length;
   selectSegment(state, lows[state.lowCursor].segmentId, true);
@@ -999,11 +1132,18 @@ function stepLow(state: AppState, dir: 1 | -1) {
 
 /** 「確かめる所」の一覧。行を押すとそこへ飛び、何番目かが手順 5 の表示と合う */
 function renderChecks(state: AppState) {
-  const lows = checkList(state);
-  document.getElementById("check-count")!.textContent = `${lows.length}`;
+  const all = checkList(state);
+  const lows = visibleChecks(state);
+  document.getElementById("check-count")!.textContent = `${all.length}`;
+  document.getElementById("check-chips")!.innerHTML = chips(CHECK_FILTERS, state.filter.checks);
+  document.getElementById("check-shown")!.textContent = lows.length !== all.length ? `${lows.length} / ${all.length} か所` : "";
   const body = document.getElementById("check-body")!;
-  if (!lows.length) {
+  if (!all.length) {
     body.innerHTML = `<p class="empty">まだありません。手順 4 で判定すると、確信が「低」だった区切りと、森林の区域と食い違う区切りがここに並びます。</p>`;
+    return;
+  }
+  if (!lows.length) {
+    body.innerHTML = `<p class="empty">この絞り込みに合う所はありません。</p>`;
     return;
   }
   const rows = lows
@@ -1344,9 +1484,50 @@ function boundsOf(ring: Position[]): [[number, number], [number, number]] {
 
 /* ---------- 一覧 ---------- */
 
+/** 絞り込みのチップ。押されているものに色を付ける */
+function chips<T extends string>(defs: { id: T; label: string; tip: string }[], current: T): string {
+  return defs.map((d) => `<button class="chip ${d.id === current ? "active" : ""}" data-filter="${d.id}" title="${escapeHtml(d.tip)}">${d.label}</button>`).join("");
+}
+
+/** 絞り込みの操作。チップと検索欄は panels.ts に置いたままなので、1 回だけつなぐ */
+function wireFilters(state: AppState) {
+  document.getElementById("hit-chips")!.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-filter]");
+    if (!b) return;
+    state.filter.hits = b.dataset.filter as HitFilter;
+    renderList(state);
+  });
+  const q = document.getElementById("hit-q") as HTMLInputElement;
+  q.addEventListener("input", () => {
+    state.filter.q = q.value;
+    renderList(state);
+  });
+  document.getElementById("check-chips")!.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-filter]");
+    if (!b) return;
+    state.filter.checks = b.dataset.filter as CheckFilter;
+    state.lowCursor = -1; // 番号が絞り込みの中の順になるので、振り出しに戻す
+    renderChecks(state);
+    if (state.step === 5) renderStep(state);
+  });
+}
+
 function renderList(state: AppState) {
   document.getElementById("list-count")!.textContent = `${state.hits.length} 筆`;
-  const rows = state.hits
+  document.getElementById("hit-chips")!.innerHTML = chips(HIT_FILTERS, state.filter.hits);
+  const shown = filterHits(state.hits, state.filter.hits, state.filter.q, {
+    parcelById: state.parcelById,
+    judgments: state.judgments,
+    checkSegs: new Set(checkList(state).map((c) => c.segmentId)),
+    forest: state.forest,
+    notes: state.notes,
+  });
+  document.getElementById("hit-shown")!.textContent = shown.length !== state.hits.length ? `${shown.length} / ${state.hits.length} 筆` : "";
+  if (!shown.length) {
+    document.getElementById("list-body")!.innerHTML = `<p class="empty">${state.hits.length ? "この絞り込みに合う筆はありません。" : "かかる筆がありません。"}</p>`;
+    return;
+  }
+  const rows = shown
     .map((h) => {
       const p = state.parcelById.get(h.parcelId)!;
       const t = treeOfParcel(state, h);

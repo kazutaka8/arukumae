@@ -249,3 +249,18 @@ table.list.kps { margin-top: 8px; }
 table.list td.note-cell { text-align: center; font-weight: 700; }
 table.list td.note-cell.ok { color: #2e7d32; }
 table.list td.note-cell.ng { color: #c62828; }
+
+/* 一覧の絞り込み（タブの下）。チップは指で押せる高さに */
+.filters[hidden] { display: none; } /* display:flex が hidden 属性に勝ってしまうため */
+.filters { flex: none; padding: 6px 8px; border-bottom: 1px solid var(--line); background: #fafbfc; display: flex; flex-direction: column; gap: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { border: 1px solid var(--line); background: #fff; border-radius: 14px; padding: 3px 10px; min-height: 28px; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.filter-row { display: flex; align-items: center; gap: 8px; }
+.filter-row input { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.filters .shown { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* 手順 1：案件名と案件ファイル */
+input.text { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; width: 100%; box-sizing: border-box; }
+.step-body p.err { color: #c62828; }
+.step-body .row.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
