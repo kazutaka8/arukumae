@@ -7,6 +7,7 @@ import { checkText, listChecks } from "./checks";
 import { forestText, noticeText, type ForestInfo } from "./forest";
 import type { Segment } from "./geom";
 import { estimateKp, formatKp, type KpMark } from "./kp";
+import { notesText, type FieldNote } from "./notes";
 import type { Judgment, ParcelHit, ParcelProps } from "./types";
 
 export interface ListRow {
@@ -23,6 +24,7 @@ export interface ListRow {
   木以外: string;
   確信: string;
   現地で確かめる所: string;
+  現地の記録: string;
   決めたのは: string;
   森林の区域: string;
   伐採の届出の目印: string;
@@ -31,7 +33,7 @@ export interface ListRow {
 
 export const COLUMNS: (keyof ListRow)[] = [
   "起点からの距離", "左右", "道路名とKP", "KPの根拠", "所在", "地番", "地番の種類", "かかる面積m2",
-  "木のある面積m2", "樹種の目安", "木以外", "確信", "現地で確かめる所", "決めたのは", "森林の区域", "伐採の届出の目印", "備考",
+  "木のある面積m2", "樹種の目安", "木以外", "確信", "現地で確かめる所", "現地の記録", "決めたのは", "森林の区域", "伐採の届出の目印", "備考",
 ];
 
 const CONF_ORDER = { 低: 0, 中: 1, 高: 2 } as const;
@@ -45,6 +47,7 @@ export function buildRows(
   forest: Map<string, ForestInfo> | null = null,
   forestFlags: Map<string, string> | null = null,
   segments: Segment[] = [],
+  notes: Map<string, FieldNote> | null = null,
 ): ListRow[] {
   // 区切りごとの「確かめる所」。確信「低」と森林の食い違いの両方
   const checksBySeg = new Map<string, ReturnType<typeof listChecks>>();
@@ -79,6 +82,7 @@ export function buildRows(
       木以外: others.join("・"),
       確信: worst ? worst.conf : "",
       現地で確かめる所: checkText(checks),
+      現地の記録: notes ? notesText(notes, h.segmentIds) : "",
       決めたのは: js.length ? (js.some((j) => j.by === "人") ? (js.every((j) => j.by === "人") ? "人" : "人・Claude") : "Claude") : "",
       森林の区域: forest ? forestText(forest.get(h.parcelId)) : "",
       伐採の届出の目印: forest ? noticeText(forest.get(h.parcelId)) : "",

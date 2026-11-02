@@ -13,6 +13,7 @@ import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon, Posit
 import type { Check } from "./checks";
 import { forestText, noticeText, type ForestInfo } from "./forest";
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./kp";
+import { noteText, notesText, type FieldNote } from "./notes";
 import { toLonLat, type EN } from "./proj";
 import type { Judgment, ParcelHit, ParcelProps } from "./types";
 
@@ -29,6 +30,8 @@ export interface FieldMapInput {
   checks: Check[];
   kps: KpMark[];
   forest: Map<string, ForestInfo> | null;
+  /** 現地の記録（○△×とメモ）。無ければ空の Map */
+  notes?: Map<string, FieldNote>;
   /** 伐採範囲（掃く範囲の外側）。あれば線で入れる */
   cutLines?: Position[][];
   madeOn: string;
@@ -125,6 +128,7 @@ function items(input: FieldMapInput): Item[] {
         ["森林の区域", f ? forestText(f) : ""],
         ["伐採の届出", f ? noticeText(f) : ""],
         ["区切り", h.segmentIds.join("・")],
+        ["現地の記録", input.notes ? notesText(input.notes, h.segmentIds) : ""],
       ]),
       geometry: h.shape as MultiPolygon,
       properties: { kind: "hit", id: h.parcelId, oaza: p.oaza, chiban: p.chiban, parcelKind: p.kind, areaM2: h.areaM2, fromM: h.fromM, toM: h.toM, sides: h.sides.join(""), treeMax: tree ?? null, forest: f ? forestText(f) : null, segmentIds: h.segmentIds },
@@ -150,9 +154,10 @@ function items(input: FieldMapInput): Item[] {
         ["確信", j?.conf ?? ""],
         ["理由", j?.why ?? ""],
         ["決めたのは", j ? `${j.by}${j.model ? `（${j.model}）` : ""}` : ""],
+        ["現地の記録", noteText(input.notes?.get(id))],
       ]),
       geometry: s.geometry,
-      properties: { kind: "segment", id, side: pr.side, fromM: pr.fromM, toM: pr.toM, areaM2: pr.areaM2, tree: j?.tree ?? null, treeKind: j?.kind ?? null, conf: j?.conf ?? null, why: j?.why ?? null, by: j?.by ?? null },
+      properties: { kind: "segment", id, side: pr.side, fromM: pr.fromM, toM: pr.toM, areaM2: pr.areaM2, tree: j?.tree ?? null, treeKind: j?.kind ?? null, conf: j?.conf ?? null, why: j?.why ?? null, by: j?.by ?? null, note: noteText(input.notes?.get(id)) || null },
     });
   }
 
@@ -166,16 +171,17 @@ function items(input: FieldMapInput): Item[] {
     const cy = ring.reduce((a, p) => a + p[1], 0) / ring.length;
     out.push({
       folder: "現地で確かめる所",
-      name: `${c.segmentId}${c.kind === "森林" ? "（森林）" : "（確信 低）"}`,
-      style: "check",
+      name: `${c.segmentId}${c.kind === "森林" ? "（森林）" : "（確信 低）"}${input.notes?.get(c.segmentId)?.result ? ` ${input.notes.get(c.segmentId)!.result}` : ""}`,
+      style: input.notes?.get(c.segmentId)?.result ? "check-done" : "check",
       description: table([
         ["区切り", c.segmentId],
         ["種類", c.kind === "森林" ? "森林の区域と判定が食い違う" : "Claude の確信が低い"],
         ["理由", c.why],
         ["木（判定）", `${c.tree}%`],
+        ["現地の記録", noteText(input.notes?.get(c.segmentId))],
       ]),
       geometry: { type: "Point", coordinates: [cx, cy] },
-      properties: { kind: "check", segmentId: c.segmentId, checkKind: c.kind, why: c.why, tree: c.tree },
+      properties: { kind: "check", segmentId: c.segmentId, checkKind: c.kind, why: c.why, tree: c.tree, note: noteText(input.notes?.get(c.segmentId)) || null },
     });
   }
 
@@ -192,6 +198,7 @@ const STYLES: Record<string, string> = {
   kp: `<IconStyle><scale>1.0</scale><color>ffff9900</color><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-blank.png</href></Icon></IconStyle>`,
   hit: `<LineStyle><color>ff00d6ff</color><width>2</width></LineStyle><PolyStyle><color>6600d6ff</color></PolyStyle>`,
   check: `<IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-stars.png</href></Icon></IconStyle>`,
+  "check-done": `<IconStyle><scale>1.0</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/grn-circle.png</href></Icon></IconStyle>`,
   cut: `<LineStyle><color>ff0098ff</color><width>2</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle>`,
 };
 

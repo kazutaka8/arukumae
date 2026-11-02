@@ -63,6 +63,17 @@ describe("現地マップの書き出し", () => {
     expect(hit.properties!.chiban).toBe("2303-1");
   });
 
+  it("現地の記録があれば、確かめる所の名前に○△×が付き、済みの印になり、吹き出しに入る", () => {
+    const inp = input();
+    inp.notes = new Map([["L001", { segmentId: "L001", result: "×", memo: "電線あり", at: "2026-11-03T01:00:00Z" }]]);
+    const kml = fieldKml(inp);
+    expect(kml).toContain("<name>L001（確信 低） ×</name>");
+    expect(kml).toContain("#check-done");
+    expect(kml).toContain("×：電線あり");
+    const gj = fieldGeoJSON(inp);
+    expect(gj.features.find((f) => f.properties!.kind === "check")!.properties!.note).toBe("×：電線あり");
+  });
+
   it("木の割合の色は aabbggrr で、多いほど赤く不透明", () => {
     expect(treeKmlColor(undefined)).toBe("59c8c8c8");
     expect(treeKmlColor(0)).toBe("40ffffff");

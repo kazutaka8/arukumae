@@ -19,6 +19,7 @@ import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type T
 import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
 import { listChecks, type Check } from "./core/checks";
+import { countNotes, NOTE_RESULTS, noteText, pruneNotes, type FieldNote, type NoteResult } from "./core/notes";
 import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
@@ -73,6 +74,8 @@ interface AppState {
   /** 公図を読んでいる最中の進み具合。null なら動いていない */
   parcelRun: { bytes: number; total: number; maps: number; kept: number; current: string | null } | null;
   parcelError: string | null;
+  /** 現地の記録（持ち運びモード）。区切りごとの○△×とメモ。この端末に残す */
+  notes: Map<string, FieldNote>;
 }
 
 interface ParcelSource {
@@ -97,6 +100,7 @@ const JUDGMENTS_KEY = "arukumae.judgments.ogawa";
 const KPS_KEY = "arukumae.kps.ogawa";
 const TRACK_KEY = "arukumae.track.ogawa";
 const PARCELS_KEY = "arukumae.parcels.ogawa";
+const NOTES_KEY = "arukumae.notes.ogawa";
 /** 公図から残す幅：区間の両側（m）。前処理（tools/cut_parcels.py）と同じ */
 const PARCEL_BUFFER_M = 200;
 
@@ -163,6 +167,7 @@ async function main() {
     demoParcels,
     parcelRun: null,
     parcelError: null,
+    notes: new Map((loadJson<FieldNote[]>(NOTES_KEY) ?? []).map((n) => [n.segmentId, n])),
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
@@ -198,6 +203,8 @@ const HELP = {
   walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」の表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
   tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
+  notes:
+    "現地の記録：持ち運びモード。現地で区切りを見て、○（判定どおり）・△（分からない）・×（違う）とメモを残します。判定そのものは変えず、記録として一覧表の列・現地マップの吹き出し・持って歩く地図の表に出ます。× の所は帰ってから「この区切りを直す」で直します。記録はこの端末に残ります。",
   buylist:
     "公図を買うリスト：かかる筆の所在・地番だけを並べた控え。登記情報提供サービスで公図や登記事項を 1 件ずつ取るとき（1 件 360 円ほど）の、取る順と抜けの確認用。同じ所在・地番は 1 行にまとめます。「購入」「備考」の列は空で、Excel で記入する欄です。",
   fieldmap:
@@ -245,6 +252,11 @@ function renderStep(state: AppState) {
       parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN}・森林の区域と食い違う ${forestN}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
       const pos = state.lowCursor >= 0 && state.lowCursor < lows.length ? `${state.lowCursor + 1} / ${lows.length}` : `— / ${lows.length}`;
       parts.push(`<div class="nav"><button class="btn" data-prev-low ${lows.length ? "" : "disabled"}>← 前</button><span class="pos">${pos}</span><button class="btn" data-next-low ${lows.length ? "" : "disabled"}>次 →</button></div>`);
+      {
+        const c = countNotes(state.notes, lows.map((l) => l.segmentId));
+        parts.push(`<p class="small">現地の記録 ${help(HELP.notes)}：確かめる所 ${lows.length} のうち <b>${c.checksDone}</b> を見た（○ ${c.byResult["○"]}・△ ${c.byResult["△"]}・× ${c.byResult["×"]}。ほかの区切りも含めて ${c.total} 件）。${c.byResult["×"] ? "× の区切りは「この区切りを直す」で判定を直してください。" : ""}</p>`);
+        if (c.total) parts.push(`<div class="row btns"><button class="btn small" data-clear-notes>現地の記録を全部消す</button></div>`);
+      }
       parts.push(`<div class="actions"><button class="btn primary" data-go="6">次へ：KP</button></div>`);
       showListTab("checks");
       break;
@@ -280,7 +292,7 @@ function renderStep(state: AppState) {
       const judged = state.judgments.size;
       parts.push(`<p>かかる筆 <b>${state.hits.length}</b> 行の一覧表です。${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りが ${state.segments.length - judged} あり、その分の木の面積は数えません。` : ""}</p>`);
       parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button></div>`);
-      parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・決めたのは・森林の区域・伐採の届出の目印・備考。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`);
+      parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・現地の記録・決めたのは・森林の区域・伐採の届出の目印・備考。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`);
       parts.push(`<h4 class="muted small" style="margin:12px 0 4px">公図を買うリスト ${help(HELP.buylist)}</h4>`);
       parts.push(`<div class="actions"><button class="btn" data-buy-csv>所在・地番のリストを書き出す（CSV）</button></div>`);
       parts.push(`<h4 class="muted small" style="margin:12px 0 4px">現地マップ（Google Earth など） ${help(HELP.fieldmap)}</h4>`);
@@ -322,12 +334,12 @@ function renderStep(state: AppState) {
     }),
   );
   body.querySelector("[data-csv]")?.addEventListener("click", () => {
-    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments);
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
   });
   body.querySelector("[data-buy-csv]")?.addEventListener("click", () => {
-    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments);
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${state.roadName}_公図を買うリスト_${day}.csv`, toBuyCsv(buildBuyList(rows)));
   });
@@ -344,6 +356,14 @@ function renderStep(state: AppState) {
     exportWalkMap(state, withPhoto);
   });
   body.querySelector("[data-prev-low]")?.addEventListener("click", () => stepLow(state, -1));
+  body.querySelector("[data-clear-notes]")?.addEventListener("click", () => {
+    if (!confirm("現地の記録（○△×とメモ）を全部消します。よいですか？")) return;
+    state.notes.clear();
+    saveNotes(state);
+    renderChecks(state);
+    renderStep(state);
+    if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
+  });
   body.querySelector("[data-judge]")?.addEventListener("click", () => runJudging(state));
   body.querySelector("[data-cancel]")?.addEventListener("click", () => {
     if (state.run) state.run.cancel = true;
@@ -785,6 +805,7 @@ function fieldMapInput(state: AppState, day: string): FieldMapInput {
     checks: checkList(state),
     kps: state.kps,
     forest: state.forest,
+    notes: state.notes,
     cutLines: state.track.source.kind === "band" ? [] : cutLines,
     madeOn: day,
   };
@@ -994,10 +1015,11 @@ function renderChecks(state: AppState) {
       return `<tr data-seg="${c.segmentId}" class="${c.segmentId === state.selectedSegment ? "selected" : ""}">
         <td class="num">${i + 1}</td><td class="num">${seg ? `${seg.fromM}〜${seg.toM}` : ""}</td><td>${side}</td>
         <td class="num">${c.tree}%</td><td>${tag}</td>
-        <td class="muted" title="${escapeHtml(c.why)}">${escapeHtml(c.why.length > 18 ? c.why.slice(0, 18) + "…" : c.why)}</td></tr>`;
+        <td class="muted" title="${escapeHtml(c.why)}">${escapeHtml(c.why.length > 18 ? c.why.slice(0, 18) + "…" : c.why)}</td>
+        <td class="note-cell ${state.notes.get(c.segmentId)?.result === "×" ? "ng" : state.notes.get(c.segmentId)?.result ? "ok" : ""}" title="${escapeHtml(noteText(state.notes.get(c.segmentId)))}">${escapeHtml(state.notes.get(c.segmentId)?.result ?? "")}</td></tr>`;
     })
     .join("");
-  body.innerHTML = `<table class="list"><thead><tr><th>#</th><th>起点から m</th><th>左右</th><th>木</th><th>種類</th><th>理由</th></tr></thead><tbody>${rows}</tbody></table>`;
+  body.innerHTML = `<table class="list"><thead><tr><th>#</th><th>起点から m</th><th>左右</th><th>木</th><th>種類</th><th>理由</th><th title="現地の記録（○△×）">現地</th></tr></thead><tbody>${rows}</tbody></table>`;
   body.querySelectorAll<HTMLTableRowElement>("tr[data-seg]").forEach((tr, i) =>
     tr.addEventListener("click", () => {
       state.lowCursor = i;
@@ -1169,9 +1191,11 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
       }
     </dl>
     <div class="seg-photo" data-seg-photo><span class="muted small">Claude が見た写真を切り出しています…</span></div>
+    ${noteForm(state.notes.get(id))}
     ${fixForm(j)}`,
   );
   wireFixForm(state, id);
+  wireNoteForm(state, id);
   showSegmentPhoto(state, id);
   if (fly) flyTo(state, boundsOf(f.geometry.coordinates[0]));
 }
@@ -1201,6 +1225,58 @@ const CONFS: Confidence[] = ["高", "中", "低"];
 
 /** 区切りの判定を人が直すフォーム（F10）。開いたときは今の値が入っている。
  * 確信だけは「高」を初期値にする：人が目で確かめて記録するのだから、Claude の「低」を引き継ぐと「確かめる所」に残り続けるため */
+/** 現地の記録の欄（持ち運びモード）。○△× は押すだけで保存、メモは入力を離れたとき（blur）に保存。現地で片手で使えるように */
+function noteForm(n: FieldNote | undefined): string {
+  return `<div class="note" data-note>
+    <div class="note-head">現地の記録 ${help(HELP.notes)}${n?.at ? `<span class="muted small"> ${new Date(n.at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>` : ""}</div>
+    <div class="note-btns">${NOTE_RESULTS.map((r) => `<button type="button" class="btn ${n?.result === r.value ? "primary" : ""}" data-note-result="${r.value}" title="${r.label}">${r.value} ${r.label}</button>`).join("")}</div>
+    <input data-note-memo value="${escapeHtml(n?.memo ?? "")}" placeholder="メモ（電線あり、もう切られている、など）">
+    ${n && (n.result || n.memo) ? `<div class="row end"><button type="button" class="btn small" data-note-clear>この記録を消す</button></div>` : ""}
+  </div>`;
+}
+
+function wireNoteForm(state: AppState, id: string) {
+  const box = document.querySelector<HTMLElement>("#detail-body [data-note]");
+  if (!box) return;
+  const save = (patch: Partial<FieldNote>) => {
+    const cur = state.notes.get(id) ?? { segmentId: id, result: "" as const, memo: "", at: "" };
+    const next: FieldNote = { ...cur, ...patch, at: new Date().toISOString() };
+    if (!next.result && !next.memo.trim()) state.notes.delete(id);
+    else state.notes.set(id, next);
+    saveNotes(state);
+    renderChecks(state);
+    if (state.step === 5) renderStep(state);
+  };
+  box.querySelectorAll<HTMLButtonElement>("[data-note-result]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const v = b.dataset.noteResult as NoteResult;
+      // 同じものをもう一度押したら外す
+      save({ result: state.notes.get(id)?.result === v ? "" : v });
+      selectSegment(state, id, false);
+    }),
+  );
+  const memo = box.querySelector<HTMLInputElement>("[data-note-memo]");
+  memo?.addEventListener("change", () => save({ memo: memo.value.trim() }));
+  memo?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") memo.blur();
+  });
+  box.querySelector("[data-note-clear]")?.addEventListener("click", () => {
+    state.notes.delete(id);
+    saveNotes(state);
+    renderChecks(state);
+    if (state.step === 5) renderStep(state);
+    selectSegment(state, id, false);
+  });
+}
+
+function saveNotes(state: AppState) {
+  try {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(pruneNotes(state.notes)));
+  } catch {
+    /* 残せなくても画面は動く */
+  }
+}
+
 function fixForm(j: Judgment | undefined): string {
   const tree = j?.tree ?? 0;
   return `<details class="fix" ${j?.by === "人" ? "open" : ""}>
@@ -1365,6 +1441,7 @@ function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
     withPhoto,
     forest: state.forest,
     forestFlags: state.forestFlags,
+    notes: state.notes,
   };
 }
 

@@ -18,6 +18,7 @@ import type { KpMark } from "./kp";
 import { estimateKp, fmtKm } from "./kp";
 import { listChecks, type Check } from "./checks";
 import type { ForestInfo } from "./forest";
+import { type FieldNote } from "./notes";
 import type { Judgment, ParcelHit } from "./types";
 import type { Sweep, TiltZone } from "./vehicle";
 
@@ -43,6 +44,8 @@ export interface WalkMapInput {
   forest: Map<string, ForestInfo> | null;
   /** 森林の区域と判定の食い違い（区切り → 理由） */
   forestFlags: Map<string, string> | null;
+  /** 現地の記録。あれば表の○×とメモの欄に印字する（もう見た所が分かるように） */
+  notes?: Map<string, FieldNote>;
 }
 
 // A4 縦（mm）。描く解像度は 8 px/mm（約 203 dpi）。地理院の写真（z18、約 0.48m／画素）を拡大して貼るので、これ以上細かくしても写真はよくならない
@@ -568,7 +571,10 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
     y += CHECK_ROW_H;
   };
   drawRow(cols.map((c) => c.label), true);
-  const filled = rows.map((r) => [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, `${r.kind === "森林" ? "森林：" : ""}${r.why}`, "○  ×", ""]);
+  const filled = rows.map((r) => {
+    const n = input.notes?.get(r.id);
+    return [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, `${r.kind === "森林" ? "森林：" : ""}${r.why}`, n?.result ? `${n.result} 済` : "○  ×", n?.memo ?? ""];
+  });
   while (filled.length < 3) filled.push(["", "", "", "", "○  ×", ""]);
   for (const r of filled) drawRow(r, false);
   footer(ctx);

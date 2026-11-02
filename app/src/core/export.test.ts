@@ -90,3 +90,13 @@ describe("公図を買うリスト", () => {
     expect(csv).toContain("大字稲丘,2303-1,ふつう,320〜360m,左,,170,,,");
   });
 });
+
+describe("現地の記録の列", () => {
+  it("筆にかかる区切りの○△×とメモを 1 つにまとめる。記録を渡さなければ空", () => {
+    const notes = new Map([["L033", { segmentId: "L033", result: "×" as const, memo: "電線あり", at: "2026-11-03T01:00:00Z" }], ["L035", { segmentId: "L035", result: "○" as const, memo: "", at: "2026-11-03T01:00:00Z" }]]);
+    const [r] = buildRows([hit], parcels, new Map(), [], "小川長野線", null, null, [], notes);
+    expect(r.現地の記録).toBe("L033 ×：電線あり ／ L035 ○");
+    expect(buildRows([hit], parcels, new Map(), [], "小川長野線")[0].現地の記録).toBe("");
+    expect(COLUMNS).toContain("現地の記録");
+  });
+});

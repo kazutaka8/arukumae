@@ -238,3 +238,14 @@ table.list.kps { margin-top: 8px; }
   .maplibregl-ctrl-bottom-right { bottom: 46%; }
   .maplibregl-ctrl-top-right { right: 10px; top: auto; bottom: calc(46% + 20px); }
 }
+
+/* 現地の記録（持ち運びモード）。指で押しやすい大きさに */
+.note { margin: 10px 0; padding: 8px 10px; background: #f3f5f7; border-radius: 6px; }
+.note-head { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.note-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 6px; }
+.note-btns .btn { padding: 8px 4px; font-size: 13px; }
+.note input { width: 100%; padding: 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.note .row.end { margin-top: 6px; }
+table.list td.note-cell { text-align: center; font-weight: 700; }
+table.list td.note-cell.ok { color: #2e7d32; }
+table.list td.note-cell.ng { color: #c62828; }
