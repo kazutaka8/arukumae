@@ -67,6 +67,7 @@ npm run build      # dist/ に静的ファイル
 | [docs/spec.md](docs/spec.md) | 仕様書。機能と受入の条件、Claude の使い方、画面の方針、試しの結果 |
 | [docs/background.md](docs/background.md) | 用地の仕事がなぜ重いかの数字と出典 |
 | [docs/demo.md](docs/demo.md) | デモ動画の筋と素材 |
+| [docs/video.md](docs/video.md) | 車載動画から障害物（電線・張り出す枝）を拾う案の検討メモ（まだ作っていない） |
 | [data/README.md](data/README.md) | 入力データの出どころと利用条件 |
 | [experiments/case_c/](experiments/case_c/) | 木の判定を Claude で試した記録（3モデル、撮影日の違う写真） |
 | [experiments/case_a/](experiments/case_a/) | 座標のない公図を Claude が航空写真に合わせられるかを試した記録（粗い当たりまで。道具には入れていない） |
