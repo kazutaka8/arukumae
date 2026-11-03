@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="アルクマエ：現地を歩く前に、かかる筆と木を洗い出す">
+  <!-- バナー（OGP・GitHub の social preview・提出の概要の頭。1200×630）。
+       左に名前と一文、右に道具の地図の見立て（公図の筆・道・かかる筆の黄色・区切りの色・赤い印）。
+       派手にせず、道具の画面と同じ色だけで作る -->
+  <rect width="1200" height="630" fill="#f7f8fa"/>
+  <!-- 右：地図の見立て -->
+  <g transform="translate(730 60)">
+    <rect width="410" height="510" rx="18" fill="#3b4f36"/>
+    <clipPath id="map"><rect width="410" height="510" rx="18"/></clipPath>
+    <g clip-path="url(#map)">
+      <g fill="none" stroke="#ffffff" stroke-opacity="0.28" stroke-width="1.5">
+        <path d="M-10 90 L120 60 L260 95 L400 70 L500 100"/>
+        <path d="M-10 190 L130 160 L270 200 L410 175 L500 205"/>
+        <path d="M-10 300 L140 270 L280 310 L420 285 L500 320"/>
+        <path d="M-10 410 L150 380 L290 420 L430 395 L500 430"/>
+        <path d="M70 -10 L50 520"/><path d="M190 -10 L160 520"/><path d="M320 -10 L300 520"/><path d="M440 -10 L420 520"/>
+      </g>
+      <!-- かかる筆（黄色の塗り）と区切りの色 -->
+      <path d="M165 160 L300 200 L292 310 L150 275 Z" fill="#ffd600" fill-opacity="0.55"/>
+      <path d="M296 95 L400 72 L410 178 L302 200 Z" fill="#ffd600" fill-opacity="0.55"/>
+      <path d="M150 275 L292 310 L282 420 L140 380 Z" fill="#ffd600" fill-opacity="0.35"/>
+      <g fill-opacity="0.75" stroke="#ffe600" stroke-width="1.5">
+        <rect x="196" y="236" width="38" height="24" fill="#f4511e" transform="rotate(-18 215 248)"/>
+        <rect x="222" y="200" width="38" height="24" fill="#ff9800" transform="rotate(-25 241 212)"/>
+        <rect x="252" y="166" width="38" height="24" fill="#f4511e" transform="rotate(-32 271 178)"/>
+        <rect x="288" y="134" width="38" height="24" fill="#ffeb3b" transform="rotate(-38 307 146)"/>
+      </g>
+      <g fill-opacity="0.75" stroke="#00dcff" stroke-width="1.5">
+        <rect x="150" y="292" width="38" height="24" fill="#ffffff" transform="rotate(-12 169 304)"/>
+        <rect x="128" y="340" width="38" height="24" fill="#ff9800" transform="rotate(-6 147 352)"/>
+      </g>
+      <!-- 道（中心線） -->
+      <path d="M110 520 C 110 400 230 380 245 300 S 300 180 340 130 S 370 80 385 46" fill="none" stroke="#f2e7c9" stroke-width="14" stroke-linecap="round" stroke-opacity="0.9"/>
+      <path d="M110 520 C 110 400 230 380 245 300 S 300 180 340 130 S 370 80 385 46" fill="none" stroke="#e53935" stroke-width="3"/>
+      <circle cx="385" cy="46" r="13" fill="#b7262a" stroke="#f7f8fa" stroke-width="4"/>
+      <!-- 起点の札 -->
+      <rect x="86" y="470" width="78" height="24" rx="6" fill="#b7262a"/>
+      <text x="125" y="487" font-family="'Hiragino Sans', 'Noto Sans JP', sans-serif" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">起点 0m</text>
+    </g>
+  </g>
+  <!-- 左：名前と一文 -->
+  <g font-family="'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', sans-serif">
+    <g transform="translate(80 92)">
+      <rect width="64" height="64" rx="14" fill="#1d232a"/>
+      <path d="M13 57 C 13 40 30 44 33 31 S 44 18 50 14" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
+      <circle cx="50" cy="14" r="8.5" fill="#b7262a" stroke="#1d232a" stroke-width="3.5"/>
+    </g>
+    <text x="160" y="140" font-size="40" font-weight="600" fill="#1d232a" letter-spacing="2">アルクマエ</text>
+    <text x="82" y="250" font-size="54" font-weight="600" fill="#1d232a" letter-spacing="1">現地を歩く前に、</text>
+    <text x="82" y="322" font-size="54" font-weight="600" fill="#1d232a" letter-spacing="1">かかる筆と木を洗い出す。</text>
+    <text x="84" y="388" font-size="22" fill="#444a52">公図・航空写真・森林の区域と軌跡図を 1 枚の地図に。</text>
+    <text x="84" y="422" font-size="22" fill="#444a52">かかる筆は計算で拾い、木の有無は Claude が</text>
+    <text x="84" y="456" font-size="22" fill="#444a52">区切りごとに判定。人が確かめて決める。</text>
+    <g transform="translate(84 500)" font-size="15" fill="#677282">
+      <rect x="0" y="0" width="156" height="32" rx="16" fill="#eef0f3"/><text x="78" y="22" text-anchor="middle">輸送路の用地下調べ</text>
+      <rect x="166" y="0" width="124" height="32" rx="16" fill="#eef0f3"/><text x="228" y="22" text-anchor="middle">風力・大型輸送</text>
+      <rect x="300" y="0" width="236" height="32" rx="16" fill="#eef0f3"/><text x="418" y="22" text-anchor="middle">Built with Claude: Japan 2026</text>
+    </g>
+    <text x="84" y="585" font-size="14" fill="#98a1ad">Koniplus ─ arukumae</text>
+  </g>
+</svg>

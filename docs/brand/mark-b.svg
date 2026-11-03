@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="アルクマエの印（案 B）">
+  <!-- 印（案 B「筆と道」）：白い地に公図の筆の線を薄く敷き、道が横切り、道にかかる筆だけ黄色。印は赤。
+       道具の地図そのものの見え方。要素が多いので 32px 以上向き（favicon には A） -->
+  <rect width="64" height="64" rx="14" fill="#ffffff"/>
+  <rect width="64" height="64" rx="14" fill="none" stroke="#d9dee3"/>
+  <g fill="none" stroke="#c9d0d8" stroke-width="1.2">
+    <path d="M8 22 L30 14 L56 20"/><path d="M6 38 L26 30 L54 36"/><path d="M12 54 L34 46 L58 52"/>
+    <path d="M18 10 L14 58"/><path d="M34 8 L28 58"/><path d="M48 10 L44 58"/>
+  </g>
+  <path d="M20 31 L28 29 L26 45 L16 48 Z" fill="#ffd600" fill-opacity="0.75"/>
+  <path d="M34 28 L46 32 L44 47 L30 44 Z" fill="#ffd600" fill-opacity="0.75"/>
+  <path d="M14 56 C 14 42 28 44 31 33 S 42 20 47 16" fill="none" stroke="#1d232a" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="49" cy="14" r="7" fill="#b7262a" stroke="#ffffff" stroke-width="2.5"/>
+</svg>
