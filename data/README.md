@@ -89,6 +89,19 @@ curl -L -o data/raw/20588-1000-2026.zip \
 - OpenStreetMap。区間の線と同じく `tools/make_section.py` の応答に入っている
 - 出典の書き方：「© OpenStreetMap contributors」。データは [ODbL](https://www.openstreetmap.org/copyright) で提供されている
 
+### 自前の案件で道具が取りに行くもの（F12。2026-11-03）
+
+道具の本体が、使う人の操作のときにブラウザから直接呼ぶ。ファイルとしては持たない。
+
+| 何を | どこから | いつ・どう | 出典の書き方 |
+|---|---|---|---|
+| 中心線の周りの市町村（名前と市区町村コード） | OpenStreetMap の行政境界（[Overpass API](https://overpass-api.de/)。本家が混んでいれば公開の写し overpass.private.coffee・overpass.kumi.systems に順に回す） | 公図の自動取得のとき。中心線と両側 200m の点（100m ごと）で `is_in` → `admin_level` 7・8 の関係。コードは `ref`（コード＋検査数字）から | © OpenStreetMap contributors（ODbL）。地図の右下に出している |
+| 中心線にする道路の線 | 同上（`highway` の way を `out geom` で） | 「OpenStreetMap の道路をたどる」のとき。起点・終点を囲む範囲（直線距離の 6 割＋500m）の道路を取り、最短路を引く | 同上。道路名は OSM の `name`・`ref` から「参考」として |
+| 公図（地図XML の zip） | [G空間情報センター](https://www.geospatial.jp/)の CKAN API（`package_search`、`q=登記所備付地図データ <市町村名>`）で見つけた、その市町村のいちばん新しい年版の zip | 市町村ごとに、利用規約（法務省）への同意のあとで取得。zip の名前が市区町村コードで始まることを確かめる（同名の町村の取り違えを防ぐ）。取得先（S3）は CORS を許し、ログインなしで取れた（2026-11-03 に確かめた） | 「登記所備付地図データ ○○（法務省）」を加工して作成。市町村名は読んだ地図の `<市区町村名>` から、データセットの URL は案件に残す |
+
+- 国土地理院の逆ジオコーダ（`mreversegeocoder.gsi.go.jp`）は、利用条件を確かめられていないので使っていない（spec §17.3）
+- 取得したデータはこの端末（IndexedDB）と案件ファイルに残るだけで、道具が外へ送ることはない
+
 ## 入れないもの
 
 - 実在の人の情報（地権者の名前・住所、登記の記録）。この道具は登記の記録を扱わない
