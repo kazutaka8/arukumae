@@ -87,7 +87,7 @@ describe("公図を買うリスト", () => {
     expect(buy[0].起点からの距離).toBe("320〜360m"); // 先に出た行の場所
     const csv = toBuyCsv(buy);
     expect(csv.startsWith("﻿" + BUY_COLUMNS.join(","))).toBe(true);
-    expect(csv).toContain("大字稲丘,2303-1,ふつう,320〜360m,左,,170,,,");
+    expect(csv).toContain("大字稲丘,2303-1,一般,320〜360m,左,,170,,,");
   });
 });
 

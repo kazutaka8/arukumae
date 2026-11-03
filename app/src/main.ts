@@ -22,11 +22,11 @@ import { listChecks, type Check } from "./core/checks";
 import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
 import { buildProject, describeProject, parseProject, projectFileName, type ProjectFile } from "./core/project";
 import { countNotes, NOTE_RESULTS, noteText, pruneNotes, type FieldNote, type NoteResult } from "./core/notes";
-import { NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
+import { kindLabel, NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
-import { buildLayout, escapeHtml, help, leftCover, openDetail, renderSteps, rightCover, showListTab, STEPS } from "./ui/panels";
+import { buildLayout, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
 
 interface AppState {
   map: MlMap;
@@ -227,6 +227,7 @@ const HELP = {
     "地図XML：法務省が無料で公開している公図の電子データ（登記所備付地図データ）の形式。G空間情報センターから市町村ごとの zip で配られ、中に地図ごとの zip と XML が入っています。公共座標系の地図はそのまま重なります。任意座標系の地図（筆の半分以上がこれ）は図面の中だけの座標なので、位置を合わせないと重なりません。この道具はまだ位置合わせに対応していないので、読み飛ばして枚数だけ伝えます。",
   project:
     "案件ファイル：この端末に残しているもの（伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録・案件名）を 1 つの JSON にまとめたもの。事務所の PC で判定して保存し、iPad に送って読み込めば続きができます。現地で記録したら、また保存して PC に戻します。軌跡図の座標が入るので、利用者の手元に置くファイルです。道具が外へ送ることはありません。",
+  kind: "種類：公図の地番の頭で分けたもの。「道」「水」は地番のない道路・水路、「無地番」は地番のない土地、「筆界未定地」は境界の決まっていない所、「一般」は地番のついたふつうの土地です。地目（宅地・田・山林など）は公図に入っていないので、ここでは分かりません。",
   filter: "絞り込み：一覧だけを絞ります。地図はそのままです（行を押せば地図が飛びます）。地番・所在の文字での検索は、種類と重ねられます。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
@@ -541,7 +542,7 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
     }
     state.track = { source, band };
     state.trackError = null;
-    setTimeout(() => rebuildTrack(state), 20);
+    rebuildTrack(state);
   });
   const fileInput = body.querySelector<HTMLInputElement>("[data-track-file]");
   fileInput?.addEventListener("change", () => {
@@ -949,7 +950,22 @@ function applyParcels(state: AppState, parcels: ParcelFeature[]) {
 }
 
 /** 伐採範囲の決め方が変わったとき、区切り・かかる筆・地図・一覧を全部作り直す */
+/**
+ * 伐採範囲の作り直し。筆の拾い直し（turf の重なり計算、数千筆 × 数百区切り）に 1〜3 秒かかり、その間は画面が止まる
+ * （起立の区間を足したら数秒固まった、と 2026-11-03 に言われた）。先に「計算中」を出し、描かれてから計算する
+ */
 function rebuildTrack(state: AppState) {
+  showBusy("伐採範囲を作り直しています。筆を拾い直すのに数秒かかります…");
+  setTimeout(() => {
+    try {
+      rebuildTrackNow(state);
+    } finally {
+      hideBusy();
+    }
+  }, 30);
+}
+
+function rebuildTrackNow(state: AppState) {
   const t0 = performance.now();
   state.trackResult = computeTrack(state.dense, state.normals, state.track);
   state.segments = state.trackResult.segments;
@@ -1109,7 +1125,7 @@ function countKinds(state: AppState): string {
     const k = state.parcelById.get(h.parcelId)!.properties.kind;
     c.set(k, (c.get(k) ?? 0) + 1);
   }
-  return [...c.entries()].map(([k, n]) => `${k} ${n}`).join("・");
+  return [...c.entries()].map(([k, n]) => `${kindLabel(k)} ${n}`).join("・");
 }
 
 /** 確かめる所＝確信「低」の区切り。起点から順、同じ所は左→右 */
@@ -1283,7 +1299,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
   openDetail(
     `${p.properties.oaza ?? ""} ${p.properties.chiban}`,
     `<dl class="kv">
-      <dt>種類</dt><dd><span class="badge" style="background:${KIND_COLORS[p.properties.kind]}">${p.properties.kind}</span></dd>
+      <dt>種類</dt><dd><span class="badge" style="background:${KIND_COLORS[p.properties.kind]}">${kindLabel(p.properties.kind)}</span> ${help(HELP.kind)}</dd>
       ${notLand ? `<dd style="grid-column:1/-1" class="muted small">土地ではなく「この地図ではここから先は描いていない」という印です。この中の筆は隣の地図に載っています。</dd>` : ""}
       <dt>かかる</dt><dd>${h ? `はい。${h.areaM2} m²` : "いいえ"}</dd>
       ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
@@ -1331,8 +1347,9 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
       }
     </dl>
     <div class="seg-photo" data-seg-photo><span class="muted small">Claude が見た写真を切り出しています…</span></div>
-    ${noteForm(state.notes.get(id))}
-    ${fixForm(j)}`,
+    <p class="muted small guide">机で判定を直すなら「この区切りを直す」。現地で見たことを残すなら「現地の記録」（判定は変えず、記録だけ残ります）。</p>
+    ${fixForm(j, !touchFirst())}
+    ${noteForm(state.notes.get(id), touchFirst())}`,
   );
   wireFixForm(state, id);
   wireNoteForm(state, id);
@@ -1366,13 +1383,22 @@ const CONFS: Confidence[] = ["高", "中", "低"];
 /** 区切りの判定を人が直すフォーム（F10）。開いたときは今の値が入っている。
  * 確信だけは「高」を初期値にする：人が目で確かめて記録するのだから、Claude の「低」を引き継ぐと「確かめる所」に残り続けるため */
 /** 現地の記録の欄（持ち運びモード）。○△× は押すだけで保存、メモは入力を離れたとき（blur）に保存。現地で片手で使えるように */
-function noteForm(n: FieldNote | undefined): string {
-  return `<div class="note" data-note>
-    <div class="note-head">現地の記録 ${help(HELP.notes)}${n?.at ? `<span class="muted small"> ${new Date(n.at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>` : ""}</div>
+/**
+ * 指で触る画面（iPad・スマホ）なら現地の記録を、マウスの画面（PC）なら直す欄を開いておく。
+ * 2 つの欄のどちらに入れるか最初に迷う、と言われた（2026-11-03）。使う場面（現地か机か）で開く欄を変え、文でも案内する
+ */
+function touchFirst(): boolean {
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+function noteForm(n: FieldNote | undefined, open: boolean): string {
+  const has = !!(n && (n.result || n.memo));
+  return `<details class="note" data-note ${open || has ? "open" : ""}>
+    <summary class="note-head">現地の記録 ${help(HELP.notes)}${has ? `<span class="badge">${n!.result || "メモ"}</span>` : ""}${n?.at ? `<span class="muted small"> ${new Date(n.at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>` : ""}</summary>
     <div class="note-btns">${NOTE_RESULTS.map((r) => `<button type="button" class="btn ${n?.result === r.value ? "primary" : ""}" data-note-result="${r.value}" title="${r.label}">${r.value} ${r.label}</button>`).join("")}</div>
     <input data-note-memo value="${escapeHtml(n?.memo ?? "")}" placeholder="メモ（電線あり、もう切られている、など）">
-    ${n && (n.result || n.memo) ? `<div class="row end"><button type="button" class="btn small" data-note-clear>この記録を消す</button></div>` : ""}
-  </div>`;
+    ${has ? `<div class="row end"><button type="button" class="btn small" data-note-clear>この記録を消す</button></div>` : ""}
+  </details>`;
 }
 
 function wireNoteForm(state: AppState, id: string) {
@@ -1417,9 +1443,9 @@ function saveNotes(state: AppState) {
   }
 }
 
-function fixForm(j: Judgment | undefined): string {
+function fixForm(j: Judgment | undefined, open: boolean): string {
   const tree = j?.tree ?? 0;
-  return `<details class="fix" ${j?.by === "人" ? "open" : ""}>
+  return `<details class="fix" ${open || j?.by === "人" ? "open" : ""}>
     <summary>この区切りを直す ${help(HELP.fix)}</summary>
     <form data-fix>
       <div class="field"><span>木の割合</span><div class="radios">${[0, 25, 50, 75, 100].map((v) => `<label><input type="radio" name="tree" value="${v}" ${v === tree ? "checked" : ""}>${v}%</label>`).join("")}</div></div>
@@ -1655,20 +1681,22 @@ async function exportWalkMap(state: AppState, withPhoto: boolean) {
 /* ---------- 凡例と表示の切り替え ---------- */
 
 function renderLegend(state: AppState) {
-  const groups: { key: LayerGroup; label: string; sub?: string }[] = [
+  const groups: { key: LayerGroup; label: string; sub?: string; indent?: boolean }[] = [
     { key: "photo", label: "航空写真（国土地理院）" },
     { key: "forest", label: "森林計画の対象森林（林野庁）", sub: `<span><i class="sw" style="background:#43a04730;border-color:#2e7d32"></i>民有林</span><span><i class="sw" style="background:#1b5e2040;border-color:#1b5e20"></i>国有林</span>` },
     {
       key: "parcels",
       label: "公図の筆（法務省）",
       sub:
-        `<span><i class="sw" style="background:#ffeb3b;border-color:#ffd600"></i>かかる部分</span><span><i class="sw" style="border-color:#ffd600;border-width:2px"></i>かかる筆</span>` +
+        `<span><i class="sw" style="border-color:#ffd600;border-width:2px"></i>かかる筆</span>` +
         Object.entries(KIND_COLORS)
           .filter(([k]) => !NOT_LAND.has(k as ParcelKind))
-          .map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${k}</span>`)
+          .map(([k, c]) => `<span><i class="sw" style="background:${c}"></i>${kindLabel(k as ParcelKind)}</span>`)
           .join("") +
         `<span><i class="sw" style="border-style:dashed;border-color:#9e9e9e"></i>地区外・別図（隣の地図を見よ）</span>`,
     },
+    // 公図の線は見たいが塗りは要らない（写真を見たい）ときがあるので、かかる部分の塗りだけ別に消せる
+    { key: "hits", label: `<i class="sw" style="background:#ffeb3b;border-color:#ffd600"></i> かかる部分の塗り`, indent: true },
     {
       key: "segments",
       label: "区切り（木の判定）",
@@ -1680,7 +1708,7 @@ function renderLegend(state: AppState) {
     { key: "kps", label: "距離標（人が置いた。手順 6）" },
   ];
   document.getElementById("legend-body")!.innerHTML = groups
-    .map((g) => `<label><input type="checkbox" data-group="${g.key}" checked> ${g.label}</label>${g.sub ? `<div class="sub">${g.sub}</div>` : ""}`)
+    .map((g) => `<label class="${g.indent ? "indent" : ""}"><input type="checkbox" data-group="${g.key}" checked> ${g.label}</label>${g.sub ? `<div class="sub">${g.sub}</div>` : ""}`)
     .join("");
   document.querySelectorAll<HTMLInputElement>("[data-group]").forEach((cb) =>
     cb.addEventListener("change", () => setGroupVisible(state.map, cb.dataset.group as LayerGroup, cb.checked)),

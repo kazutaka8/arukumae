@@ -11,6 +11,15 @@ export type ParcelKind = "ふつう" | "道" | "水" | "無地番" | "地区外"
  */
 export const NOT_LAND: ReadonlySet<ParcelKind> = new Set<ParcelKind>(["地区外", "別図"]);
 
+/**
+ * 画面・一覧表・KML に出すときの種類の名前。データの値は地図XML の地番の頭（「道-」「水-」…）から決めた「ふつう」のままにし、
+ * 見せる所だけ「一般」にする（「ふつう」は一覧表の列の値として落ち着かない、と 2026-11-03 に言われた）。
+ * 地目（宅地・山林…）は公図に入っていないので、ここでは分からない
+ */
+export function kindLabel(k: ParcelKind): string {
+  return k === "ふつう" ? "一般" : k;
+}
+
 export interface ParcelProps {
   id: string;
   map: string;

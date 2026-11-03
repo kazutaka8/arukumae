@@ -62,6 +62,26 @@ describe("追従の計算（架空の軌跡図）", () => {
     expect(zoned.right[dense.length - 20]).toBeCloseTo(flat.right[dense.length - 20], 3); // 区間を出たあと（直線）
   });
 
+  it("ヘアピンの外側でも、両隣より 1m 以上へこむ点がない（先が飛び越した所の幅が落ちてギザギザにならない）", () => {
+    // 北へ 150m → 半径 15m で右へ 180° → 南へ 150m
+    const pts: EN[] = [[0, 0], [0, 150]];
+    for (let k = 1; k <= 36; k++) {
+      const a = Math.PI * (k / 36);
+      pts.push([15 - 15 * Math.cos(a), 150 + 15 * Math.sin(a)]);
+    }
+    pts.push([30, 0]);
+    const dense = resample(pts, 1);
+    const sw = sweepVehicle(dense, leftNormals(dense), { ...PRESETS.lifter.vehicle, tilt: 0 });
+    // 右カーブの外側は左。寝かせた 60m のブレードの先が大きく振れる
+    expect(sweepMax(sw).left).toBeGreaterThan(20);
+    // 幅が単調に増える・減るのは先が振れる形そのもの。直すのは「1 点だけ落ちる」ノコギリなので、両隣の小さいほうとの差で見る
+    let worst = 0;
+    for (let i = 100; i < dense.length - 100; i++) {
+      for (const a of [sw.left, sw.right]) worst = Math.max(worst, Math.min(a[i - 1], a[i + 1]) - a[i]);
+    }
+    expect(worst).toBeLessThan(1);
+  });
+
   it("中心線の前後に点を足す（車両が区間の外から入って出ていくまでを計算するため）", () => {
     const ext = extendLine([[0, 0], [10, 0]], 3, 2);
     expect(ext[0]).toEqual([-3, 0]);

@@ -23,6 +23,7 @@ export const STEPS_WITH_LIST: ReadonlySet<number> = new Set([3, 4, 5, 7]);
 export type ListTab = "hits" | "checks";
 
 const LIST_W_KEY = "arukumae.listW";
+const STEPS_W_KEY = "arukumae.stepsW";
 
 /** 用語の説明。マウスを載せる（または押す）と出る。文字だらけにせず、意味の分からない言葉を残さないため */
 export function help(text: string): string {
@@ -43,15 +44,18 @@ export function buildLayout(root: HTMLElement) {
       <div id="map" class="map"></div>
 
       <aside class="panel steps" id="steps-panel">
-        <div class="steps-col">
-          <div class="panel-head"><span>手順</span><button class="icon-btn" data-close="steps-panel" aria-label="閉じる">×</button></div>
+        <div class="steps-col" id="steps-col">
+          <div class="panel-head"><span>手順</span><span class="head-btns"><button class="btn small ghost" id="show-list" title="一覧を出す" hidden>一覧 ▸</button><button class="icon-btn" id="hide-steps" title="手順をたたむ（一覧と地図を残す）" aria-label="手順をたたむ">×</button></span></div>
           <ol class="step-list" id="step-list"></ol>
           <div class="step-body" id="step-body"></div>
+          <div class="resizer" id="steps-resizer" title="ドラッグで幅を変える"></div>
         </div>
         <div class="list-col" id="list-section" hidden>
           <div class="tabs" role="tablist">
+            <button class="btn small ghost" id="show-steps" title="手順を出す" hidden>◂ 手順</button>
             <button class="tab active" data-tab="hits" role="tab">かかる筆 <span class="count" id="list-count"></span></button>
             <button class="tab" data-tab="checks" role="tab">確かめる所 <span class="count" id="check-count"></span></button>
+            <button class="icon-btn" id="hide-list" title="一覧をたたむ（手順と地図を残す）" aria-label="一覧をたたむ">×</button>
           </div>
           <div class="filters" data-tab-body="hits">
             <div class="chips" id="hit-chips"></div>
@@ -79,6 +83,7 @@ export function buildLayout(root: HTMLElement) {
     </main>
 
     <div class="tip" id="tip" hidden></div>
+    <div class="busy" id="busy" hidden role="status"></div>
 
     <dialog id="settings-dialog" class="dialog">
       <form method="dialog">
@@ -110,7 +115,7 @@ export function buildLayout(root: HTMLElement) {
   root.querySelectorAll<HTMLButtonElement>("[data-close]").forEach((b) =>
     b.addEventListener("click", () => document.getElementById(b.dataset.close!)!.classList.add("collapsed")),
   );
-  root.querySelector("#toggle-steps")!.addEventListener("click", () => document.getElementById("steps-panel")!.classList.toggle("collapsed"));
+  wireColumns(root);
   root.querySelector("#toggle-legend")!.addEventListener("click", (e) => {
     const legend = document.getElementById("legend")!;
     legend.classList.toggle("collapsed");
@@ -124,34 +129,107 @@ export function buildLayout(root: HTMLElement) {
   wireHelp(root);
 }
 
-/** 一覧の列の幅。ドラッグで変え、この端末に覚える。画面の広さと筆の数で、ちょうどよい幅が人によって違うため */
+/**
+ * 左のパネルの 2 列（手順・一覧）は、それぞれ別にたためる。
+ * 「手順だけ隠して一覧と地図を見たい」「一覧だけ隠したい」の両方があった（2026-11-03 に触ってもらって分かった）。
+ * 両方たたんだらパネルごと閉じる。上の ☰ はパネル全体を開け閉めし、開けるときは両方の列を出す
+ */
+function wireColumns(root: HTMLElement) {
+  const panel = root.querySelector<HTMLElement>("#steps-panel")!;
+  const sync = () => {
+    const noSteps = panel.classList.contains("no-steps");
+    const noList = panel.classList.contains("no-list");
+    root.querySelector<HTMLElement>("#show-list")!.hidden = !noList || !STEPS_WITH_LIST.has(currentStep);
+    root.querySelector<HTMLElement>("#show-steps")!.hidden = !noSteps;
+    if (noSteps && (noList || !STEPS_WITH_LIST.has(currentStep))) {
+      panel.classList.add("collapsed");
+      panel.classList.remove("no-steps", "no-list");
+      sync();
+    }
+  };
+  root.querySelector("#hide-steps")!.addEventListener("click", () => {
+    panel.classList.add("no-steps");
+    sync();
+  });
+  root.querySelector("#hide-list")!.addEventListener("click", () => {
+    panel.classList.add("no-list");
+    sync();
+  });
+  root.querySelector("#show-steps")!.addEventListener("click", () => {
+    panel.classList.remove("no-steps");
+    if (narrow()) panel.classList.add("no-list"); // スマホ幅は 1 列ずつ：手順を出すなら一覧をたたむ
+    sync();
+  });
+  root.querySelector("#show-list")!.addEventListener("click", () => {
+    panel.classList.remove("no-list");
+    sync();
+  });
+  root.querySelector("#toggle-steps")!.addEventListener("click", () => {
+    const open = panel.classList.contains("collapsed");
+    panel.classList.toggle("collapsed", !open);
+    if (open) panel.classList.remove("no-steps", "no-list");
+    sync();
+  });
+  columnSync = sync;
+  // スマホ幅：最初は一覧をたたみ、凡例も閉じておく（地図が見えなくなるため）
+  if (narrow()) {
+    panel.classList.add("no-list");
+    root.querySelector("#legend")!.classList.add("collapsed");
+    root.querySelector("#toggle-legend")!.textContent = "+";
+  }
+}
+
+const narrow = () => window.innerWidth < 600;
+
+let currentStep = 1;
+let columnSync: (() => void) | null = null;
+
+/**
+ * 列の幅。ドラッグで変え、この端末に覚える。画面の広さと筆の数で、ちょうどよい幅が人によって違うため。
+ * 手順の列（--steps-w）と一覧の列（--list-w）に同じ仕組みを使う
+ */
 function wireResizer(root: HTMLElement) {
   const panel = root.querySelector<HTMLElement>("#steps-panel")!;
-  const saved = Number(localStorage.getItem(LIST_W_KEY));
-  if (saved >= 260) panel.style.setProperty("--list-w", `${saved}px`);
-  const handle = root.querySelector<HTMLElement>("#list-resizer")!;
-  handle.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    const col = root.querySelector<HTMLElement>("#list-section")!;
-    const startX = e.clientX;
-    const startW = col.getBoundingClientRect().width;
-    panel.classList.add("resizing");
-    // 動きと離す操作は window で拾う。速く動かして指がつまみから外れても追いかけるため
-    const move = (ev: PointerEvent) => {
-      const w = Math.min(760, Math.max(260, startW + ev.clientX - startX));
-      panel.style.setProperty("--list-w", `${w}px`);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      panel.classList.remove("resizing");
-      localStorage.setItem(LIST_W_KEY, String(Math.round(col.getBoundingClientRect().width)));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-  });
+  const one = (handleId: string, colId: string, cssVar: string, key: string, min: number, max: number) => {
+    const saved = Number(localStorage.getItem(key));
+    if (saved >= min && saved <= max) panel.style.setProperty(cssVar, `${saved}px`);
+    const handle = root.querySelector<HTMLElement>(handleId)!;
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      const col = root.querySelector<HTMLElement>(colId)!;
+      const startX = e.clientX;
+      const startW = col.getBoundingClientRect().width;
+      panel.classList.add("resizing");
+      // 動きと離す操作は window で拾う。速く動かして指がつまみから外れても追いかけるため
+      const move = (ev: PointerEvent) => {
+        const w = Math.min(max, Math.max(min, startW + ev.clientX - startX));
+        panel.style.setProperty(cssVar, `${w}px`);
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        panel.classList.remove("resizing");
+        localStorage.setItem(key, String(Math.round(col.getBoundingClientRect().width)));
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+  };
+  one("#list-resizer", "#list-section", "--list-w", LIST_W_KEY, 260, 760);
+  one("#steps-resizer", "#steps-col", "--steps-w", STEPS_W_KEY, 220, 520);
+}
+
+/** 画面が止まる計算の前に出す知らせ。描かれてから計算を始めるよう、呼ぶ側は setTimeout で一拍置く */
+export function showBusy(text: string) {
+  const el = document.getElementById("busy")!;
+  el.textContent = text;
+  el.hidden = false;
+}
+
+export function hideBusy() {
+  document.getElementById("busy")!.hidden = true;
 }
 
 /** 「?」に載せると説明を出す。パネルは overflow: hidden なので、中に置かず画面に直接置く */
@@ -204,6 +282,8 @@ export function renderSteps(current: number, onSelect: (n: number) => void) {
   ol.querySelectorAll<HTMLLIElement>("li").forEach((li) => li.addEventListener("click", () => onSelect(Number(li.dataset.n))));
   // 一覧の要る手順では列を出す。要らない手順では地図を広く使う
   document.getElementById("list-section")!.hidden = !STEPS_WITH_LIST.has(current);
+  currentStep = current;
+  columnSync?.();
 }
 
 /** 左のパネルが地図を隠している幅（px）。飛ぶ先をパネルの外に寄せるために使う */

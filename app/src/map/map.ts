@@ -26,7 +26,9 @@ export const KIND_COLORS: Record<ParcelKind, string> = {
 export const LAYER_IDS = {
   photo: "photo",
   forest: ["forest-fill", "forest-line"],
-  parcels: ["parcels-fill", "parcels-selected", "parcels-line", "parcels-label", "hit-areas"],
+  parcels: ["parcels-fill", "parcels-selected", "parcels-line", "parcels-label"],
+  /** かかる部分の黄色の塗り。公図の線は見たいが塗りは要らない（写真を見たい）ときに、別に消せるようにする */
+  hits: ["hit-areas"],
   segments: ["segments-fill", "segments-line", "segments-label"],
   track: ["track-fill", "track-line", "track-cut", "track-tilt", "track-tilt-label"],
   section: ["section-line", "section-ends"],

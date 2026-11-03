@@ -196,6 +196,45 @@ def crop(name, from_m, to_m, scale=3, layer="seamlessphoto"):
     print(f"{name}: 区切り {len(sel)}、画像 {plain.size}")
 
 
+def crop_from(name, geojson, scale=3, layer="seamlessphoto"):
+    """道具の本体が作った区切り（緯度経度の GeoJSON。properties に id・side）を、crop() と同じ描き方で画像にする。
+    見本の判定を、試しの固定幅 13m の帯ではなく、道具の実際の区切り（架空の軌跡図の形）で取り直すため（2026-11-03）。
+    13m の帯で「草地が主体」と判定した L050 が、道具では幅 45m の区切りになっていて森ばかりだった。"""
+    fc = json.loads(Path(geojson).read_text(encoding="utf-8"))
+    sel = []
+    for f in fc["features"]:
+        ring = f["geometry"]["coordinates"][0]
+        sel.append({"id": f["properties"]["id"], "side": f["properties"]["side"], "from_m": f["properties"]["fromM"], "to_m": f["properties"]["toM"], "ll": [(c[1], c[0]) for c in ring]})
+    lls = [p for s in sel for p in s["ll"]]
+    pad = 15 / R * 180 / math.pi
+    la = [p[0] for p in lls]
+    lo = [p[1] for p in lls]
+    base, (ox, oy) = mosaic(min(la) - pad, min(lo) - pad / math.cos(math.radians(la[0])), max(la) + pad, max(lo) + pad / math.cos(math.radians(la[0])), layer=layer)
+    base = base.resize((base.width * scale, base.height * scale), Image.LANCZOS)
+
+    def px(lat, lon):
+        x, y = ll_to_px(lat, lon)
+        return ((x - ox) * scale, (y - oy) * scale)
+
+    plain = base.copy()
+    labeled = base.copy()
+    d = ImageDraw.Draw(labeled)
+    for s in sel:
+        poly = [px(*p) for p in s["ll"]]
+        d.polygon(poly, outline=(255, 230, 0) if s["side"] == "L" else (0, 220, 255), width=2)
+    for s in sel:
+        poly = [px(*p) for p in s["ll"]]
+        cx = sum(p[0] for p in poly) / len(poly)
+        cy = sum(p[1] for p in poly) / len(poly)
+        d.text((cx, cy), s["id"], fill=(255, 255, 255), font=font(15), anchor="mm", stroke_width=3, stroke_fill=(0, 0, 0))
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    plain.save(OUT_DIR / f"{name}_plain.jpg", quality=90)
+    labeled.save(OUT_DIR / f"{name}_labeled.jpg", quality=90)
+    meta = [{k: v for k, v in s.items() if k != "ll"} for s in sel]
+    (OUT_DIR / f"{name}_segments.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"{name}: 区切り {len(sel)}、画像 {plain.size}")
+
+
 def crop_nagano(name, from_m, to_m, tif, scale=2.5):
     """長野県の航空写真（0.4m／画素）で、同じ区切りの札なし・札ありの画像を作る。
 
@@ -245,5 +284,7 @@ if __name__ == "__main__":
         overview()
     elif sys.argv[1] == "crop-nagano":
         crop_nagano(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5])
+    elif sys.argv[1] == "crop-from":
+        crop_from(sys.argv[2], sys.argv[3])
     elif sys.argv[1] == "crop":
         crop(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), layer=sys.argv[5] if len(sys.argv) > 5 else "seamlessphoto")

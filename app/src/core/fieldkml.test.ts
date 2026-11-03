@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { listChecks } from "./checks";
-import { fieldGeoJSON, fieldKml, treeKmlColor, type FieldMapInput } from "./fieldkml";
+import { cleanRings, fieldGeoJSON, fieldKml, treeKmlColor, type FieldMapInput } from "./fieldkml";
 import { buildSegments, leftNormals, resample } from "./geom";
 import { segmentsToGeoJSON } from "./parcels";
 import { toLonLat, type EN } from "./proj";
@@ -72,6 +72,31 @@ describe("現地マップの書き出し", () => {
     expect(kml).toContain("×：電線あり");
     const gj = fieldGeoJSON(inp);
     expect(gj.features.find((f) => f.properties!.kind === "check")!.properties!.note).toBe("×：電線あり");
+  });
+
+  it("地番の札（点）がかかる筆ごとに入り、字だけの様式になる", () => {
+    const kml = fieldKml(input());
+    expect(kml).toContain("<name>地番の札（1）</name>");
+    expect(kml).toContain('<Style id="chiban"><IconStyle><scale>0</scale>');
+    expect(kml).toMatch(/<Placemark><name>2303-1<\/name><styleUrl>#chiban<\/styleUrl>.*<Point><coordinates>137\.9\d+,36\.6\d+,0/);
+    const gj = fieldGeoJSON(input());
+    expect(gj.features.filter((f) => f.properties!.kind === "label")).toHaveLength(1);
+  });
+
+  it("面にならない欠片（点が 3 つ未満）は書き出さない。Google Earth が「閉じた多角形にならない」と警告して 0,0 に置くため", () => {
+    const inp = input();
+    const ring = inp.hits[0].shape.coordinates[0][0];
+    // 線のような欠片（2 点を往復）と、1cm 未満の違いしかない点ばかりの欠片を足す
+    const sliver: typeof ring = [ring[0], ring[1], ring[0]];
+    const dust: typeof ring = [ring[0], [ring[0][0] + 1e-9, ring[0][1]], [ring[0][0], ring[0][1] + 1e-9], ring[0]];
+    inp.hits[0].shape = { type: "MultiPolygon", coordinates: [[ring], [sliver], [dust]] };
+    const kml = fieldKml(inp);
+    expect(kml).not.toContain("<MultiGeometry>"); // 欠片が落ちて 1 つの面だけ
+    expect(cleanRings([sliver])).toBeNull();
+    expect(cleanRings([ring, dust])).toEqual([ring]);
+    // 全部落ちたら、形のない Placemark になる（名前と吹き出しは残る）
+    inp.hits[0].shape = { type: "MultiPolygon", coordinates: [[sliver]] };
+    expect(fieldKml(inp)).toMatch(/<name>大字稲丘 2303-1<\/name><styleUrl>#hit<\/styleUrl><description>.*?<\/description><\/Placemark>/);
   });
 
   it("木の割合の色は aabbggrr で、多いほど赤く不透明", () => {

@@ -8,7 +8,7 @@ import { forestText, noticeText, type ForestInfo } from "./forest";
 import type { Segment } from "./geom";
 import { estimateKp, formatKp, type KpMark } from "./kp";
 import { notesText, type FieldNote } from "./notes";
-import type { Judgment, ParcelHit, ParcelProps } from "./types";
+import { kindLabel, type Judgment, type ParcelHit, type ParcelProps } from "./types";
 
 export interface ListRow {
   起点からの距離: string;
@@ -75,7 +75,7 @@ export function buildRows(
       KPの根拠: est?.basis ?? (kps.length < 2 ? "距離標が 2 本未満" : ""),
       所在: p.oaza ?? "",
       地番: p.chiban,
-      地番の種類: p.kind,
+      地番の種類: kindLabel(p.kind),
       かかる面積m2: h.areaM2,
       木のある面積m2: js.length ? Math.round(treeArea * 10) / 10 : "",
       樹種の目安: kinds,

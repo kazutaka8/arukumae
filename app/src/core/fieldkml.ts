@@ -15,7 +15,7 @@ import { forestText, noticeText, type ForestInfo } from "./forest";
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./kp";
 import { noteText, notesText, type FieldNote } from "./notes";
 import { toLonLat, type EN } from "./proj";
-import type { Judgment, ParcelHit, ParcelProps } from "./types";
+import { kindLabel, type Judgment, type ParcelHit, type ParcelProps } from "./types";
 
 export interface FieldMapInput {
   title: string;
@@ -48,7 +48,20 @@ export function treeKmlColor(tree: number | undefined): string {
 }
 
 const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const coords = (pts: Position[]) => pts.map((c) => `${c[0].toFixed(7)},${c[1].toFixed(7)},0`).join(" ");
+const fmt = (c: Position) => `${c[0].toFixed(7)},${c[1].toFixed(7)}`;
+const coords = (pts: Position[]) => pts.map((c) => `${fmt(c)},0`).join(" ");
+
+/**
+ * 面にならないリング（書き出しの桁 7 桁＝約 1cm に丸めると、違う点が 3 つ未満になるもの）を落とす。
+ * 筆と区切りの重なり（turf.intersect）は、境目でごく細い欠片や線のような欠片を作ることがあり、
+ * Google Earth がそれを「閉じた多角形にならない」と警告して 0,0 に置いた（2026-11-03 に Android で確認）。
+ * 外周が面にならない多角形は丸ごと落とす。面積にも一覧にも関わらない（表示の形だけ）
+ */
+export function cleanRings(rings: Position[][]): Position[][] | null {
+  const ok = (r: Position[]) => new Set(r.map(fmt)).size >= 3;
+  if (!rings.length || !ok(rings[0])) return null;
+  return [rings[0], ...rings.slice(1).filter(ok)];
+}
 
 function kmlPolygon(rings: Position[][]): string {
   const [outer, ...inner] = rings;
@@ -59,10 +72,15 @@ function kmlPolygon(rings: Position[][]): string {
 
 function kmlGeometry(g: Geometry): string {
   switch (g.type) {
-    case "Polygon":
-      return kmlPolygon(g.coordinates);
-    case "MultiPolygon":
-      return g.coordinates.length === 1 ? kmlPolygon(g.coordinates[0]) : `<MultiGeometry>${g.coordinates.map(kmlPolygon).join("")}</MultiGeometry>`;
+    case "Polygon": {
+      const rings = cleanRings(g.coordinates);
+      return rings ? kmlPolygon(rings) : "";
+    }
+    case "MultiPolygon": {
+      const polys = g.coordinates.map(cleanRings).filter((r): r is Position[][] => !!r);
+      if (!polys.length) return "";
+      return polys.length === 1 ? kmlPolygon(polys[0]) : `<MultiGeometry>${polys.map(kmlPolygon).join("")}</MultiGeometry>`;
+    }
     case "LineString":
       return `<LineString><tessellate>1</tessellate><coordinates>${coords(g.coordinates)}</coordinates></LineString>`;
     case "Point":
@@ -70,6 +88,26 @@ function kmlGeometry(g: Geometry): string {
     default:
       return "";
   }
+}
+
+/** 札を置く点：いちばん大きい欠片の外周の頂点の平均。へこんだ形では外に出ることもあるが、札の位置なので目安で足りる */
+export function labelPoint(shape: MultiPolygon): Position | null {
+  let best: Position[] | null = null;
+  let bestArea = -1;
+  for (const rings of shape.coordinates) {
+    const r = cleanRings(rings)?.[0];
+    if (!r) continue;
+    let a = 0;
+    for (let i = 0; i < r.length - 1; i++) a += r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1];
+    a = Math.abs(a);
+    if (a > bestArea) {
+      bestArea = a;
+      best = r;
+    }
+  }
+  if (!best) return null;
+  const pts = best.slice(0, -1);
+  return [pts.reduce((s, c) => s + c[0], 0) / pts.length, pts.reduce((s, c) => s + c[1], 0) / pts.length];
 }
 
 /** 説明文（吹き出し）。表の形で、行の名前と値 */
@@ -120,7 +158,7 @@ function items(input: FieldMapInput): Item[] {
       style: "hit",
       description: table([
         ["所在・地番", name],
-        ["種類", p.kind],
+        ["種類", kindLabel(p.kind)],
         ["かかる面積", `${h.areaM2} m²`],
         ["起点から", `${h.fromM}〜${h.toM}m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）`],
         ["KP（推定）", kpOf((h.fromM + h.toM) / 2)],
@@ -133,6 +171,15 @@ function items(input: FieldMapInput): Item[] {
       geometry: h.shape as MultiPolygon,
       properties: { kind: "hit", id: h.parcelId, oaza: p.oaza, chiban: p.chiban, parcelKind: p.kind, areaM2: h.areaM2, fromM: h.fromM, toM: h.toM, sides: h.sides.join(""), treeMax: tree ?? null, forest: f ? forestText(f) : null, segmentIds: h.segmentIds },
     });
+  }
+  // 地番の札：Google Earth は面の名前を地図に描かないので、かかる部分のいちばん大きい欠片の真ん中に点を置いて名前（地番）を出す。
+  // 印は消して字だけにする（現地で iPad の画面に地番を読みたい、と 2026-11-03 に言われた）
+  for (const h of input.hits) {
+    const p = input.parcelById.get(h.parcelId)?.properties;
+    if (!p) continue;
+    const at = labelPoint(h.shape as MultiPolygon);
+    if (!at) continue;
+    out.push({ folder: "地番の札", name: p.chiban, style: "chiban", description: `${p.oaza ?? ""} ${p.chiban}（かかる面積 ${h.areaM2} m²）`.trim(), geometry: { type: "Point", coordinates: at }, properties: { kind: "label", id: h.parcelId, oaza: p.oaza, chiban: p.chiban } });
   }
 
   // 区切り（判定の色）
@@ -197,6 +244,7 @@ const STYLES: Record<string, string> = {
   tick: `<IconStyle><scale>0.5</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle><LabelStyle><scale>0.7</scale></LabelStyle>`,
   kp: `<IconStyle><scale>1.0</scale><color>ffff9900</color><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-blank.png</href></Icon></IconStyle>`,
   hit: `<LineStyle><color>ff00d6ff</color><width>2</width></LineStyle><PolyStyle><color>6600d6ff</color></PolyStyle>`,
+  chiban: `<IconStyle><scale>0</scale></IconStyle><LabelStyle><color>ff00ffff</color><scale>0.8</scale></LabelStyle>`,
   check: `<IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-stars.png</href></Icon></IconStyle>`,
   "check-done": `<IconStyle><scale>1.0</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/grn-circle.png</href></Icon></IconStyle>`,
   cut: `<LineStyle><color>ff0098ff</color><width>2</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle>`,

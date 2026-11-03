@@ -10,6 +10,20 @@
 .venv/bin/python experiments/case_c/segments.py crop B 500 700
 .venv/bin/python experiments/case_c/run.py                        # 2か所 × 3モデル × 3回（約 $2）
 .venv/bin/python experiments/case_c/forest.py A B                 # 区切りごとの森林の区域の割合
+```
+
+道具の本体が作る区切り（既定の車両の架空の軌跡図）で見本の判定を取り直す（2026-11-03。道具に入れている見本はこちら）：
+
+```bash
+# app/ で既定の車両の区切りを GeoJSON に書き出す（segmentsToGeoJSON。窓 A=100〜300m、B=500〜700m の id）→ out/A_vehicle_segments.geojson
+.venv/bin/python experiments/case_c/segments.py crop-from A_vehicle experiments/case_c/out/A_vehicle_segments.geojson
+.venv/bin/python experiments/case_c/segments.py crop-from B_vehicle experiments/case_c/out/B_vehicle_segments.geojson
+.venv/bin/python -c "import sys; sys.path.insert(0,'experiments/case_c'); import run, anthropic; c=anthropic.Anthropic(api_key=run.api_key()); [run.judge(c, w, 'sonnet', 1) for w in ('A_vehicle','B_vehicle')]"
+```
+
+初日の試し（A・B）は幅 13m の固定の帯で判定した。道具の区切りはカーブの外側で幅 45m になり（ブレードの先の振れ）、
+13m の帯で「草地が主体 25%」だった L050〜L052 が、道具では森ばかりの区切りになっていた（触ってもらって分かった）。
+取り直した結果（`out/results/*_vehicle_sonnet_1.json`）では L050・L051 が 75%、L052 が 100%。Sonnet 1 回、2 窓で $0.06。
 .venv/bin/python experiments/case_c/analyze.py                    # まとめ
 ```
 
@@ -36,7 +50,8 @@ API キーはキーチェーンの `arukumae-anthropic-api-key` から読む。
 | `jgd.py` | 緯度経度 → 平面直角座標系（第VIII系）。長野県の写真に区切りを重ねるため |
 | `run_multi.py`・`analyze_multi.py` | 撮影日の違う写真の試し（2023年だけ／2枚を一緒に）とまとめ |
 | `out/results_single/`・`out/results_multi/` | その判定（JSON）。長野県の写真から作った画像は入れていない |
-| `out/*_plain.jpg`・`out/*_labeled.jpg` | Claude に見せた画像 |
+| `out/*_plain.jpg`・`out/*_labeled.jpg` | Claude に見せた画像。`*_vehicle_*` は道具の区切りの形で描いたもの |
+| `out/*_vehicle_segments.geojson` | 道具の本体が作った区切り（既定の車両）。`crop-from` の入力 |
 | `out/results/` | 1回ごとの判定（JSON） |
 
 ## 出典
