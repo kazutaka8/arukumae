@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="アルクマエ：ブレードの軌跡図">
+<rect width="64" height="64" rx="14" fill="#0f1b33"/><clipPath id="c"><rect width="64" height="64" rx="14"/></clipPath><g clip-path="url(#c)">
+<path d="M0 0 V64 M0 0 H64 M8 0 V64 M0 8 H64 M16 0 V64 M0 16 H64 M24 0 V64 M0 24 H64 M32 0 V64 M0 32 H64 M40 0 V64 M0 40 H64 M48 0 V64 M0 48 H64 M56 0 V64 M0 56 H64 M64 0 V64 M0 64 H64" stroke="#ffffff" stroke-opacity="0.08" stroke-width="0.5" fill="none"/>
+<path d="M18.74 40.50 A13 13 0 0 1 39.96 25.64 L20.67 2.66 A32.70 32.70 0 0 0 33.74 66.48 Z" fill="#ffffff" fill-opacity="0.1"/>
+<path d="M33.74 66.48 A32.70 32.70 0 0 1 20.67 2.66" fill="none" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round"/>
+<path d="M18.74 40.50 A13 13 0 0 1 39.96 25.64" fill="none" stroke="#ffffff" stroke-opacity="0.6" stroke-width="0.7" stroke-dasharray="1.5 1.5"/>
+<path d="M18.74 40.50 L33.74 66.48" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.95"/>
+<circle cx="18.74" cy="40.50" r="1.0" fill="#ffffff"/>
+<path d="M17.01 34.38 L17.88 64.37" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.95"/>
+<circle cx="17.01" cy="34.38" r="1.0" fill="#ffffff"/>
+<path d="M18.38 28.17 L4.92 54.97" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.95"/>
+<circle cx="18.38" cy="28.17" r="1.0" fill="#ffffff"/>
+<path d="M22.54 23.35 L-2.03 40.56" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.95"/>
+<circle cx="22.54" cy="23.35" r="1.0" fill="#ffffff"/>
+<path d="M28.49 21.09 L-1.31 24.57" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.95"/>
+<circle cx="28.49" cy="21.09" r="1.0" fill="#ffffff"/>
+<path d="M34.80 21.92 L6.92 10.84" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.95"/>
+<circle cx="34.80" cy="21.92" r="1.0" fill="#ffffff"/>
+<path d="M39.96 25.64 L20.67 2.66" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round" stroke-opacity="1"/>
+<circle cx="39.96" cy="25.64" r="1.3" fill="#ffffff"/>
+</g></svg>
