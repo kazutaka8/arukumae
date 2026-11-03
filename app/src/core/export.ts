@@ -48,10 +48,11 @@ export function buildRows(
   forestFlags: Map<string, string> | null = null,
   segments: Segment[] = [],
   notes: Map<string, FieldNote> | null = null,
+  unjudged: ReadonlySet<string> | null = null,
 ): ListRow[] {
-  // 区切りごとの「確かめる所」。確信「低」と森林の食い違いの両方
+  // 区切りごとの「確かめる所」。確信「低」・森林の食い違い・変化・未判定（画面・KML・PDF と同じ並びにする）
   const checksBySeg = new Map<string, ReturnType<typeof listChecks>>();
-  for (const c of listChecks(segments, judgments, forestFlags)) {
+  for (const c of listChecks(segments, judgments, forestFlags, unjudged)) {
     const arr = checksBySeg.get(c.segmentId) ?? [];
     arr.push(c);
     checksBySeg.set(c.segmentId, arr);

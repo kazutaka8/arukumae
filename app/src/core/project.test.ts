@@ -127,3 +127,14 @@ describe("案件ファイル", () => {
     expect(projectFileName("", "2026-11-03")).toBe("arukumae_案件_2026-11-03.json");
   });
 });
+
+describe("長い道の案件（起点から 10km を超えると区切りの番号が 4 桁になる）", () => {
+  it("L1000 のような番号の判定・記録・未判定を読める（Claude の独立レビュー 2026-11-03）", () => {
+    const p = { ...made(), judgments: [{ ...made().judgments[0], segmentId: "L1000" }], notes: [{ segmentId: "R1234", result: "○", memo: "", at: "" }], unjudged: ["L999", "R1000"] };
+    const r = parseProject(JSON.stringify(p), DEMO);
+    expect(r.judgments[0].segmentId).toBe("L1000");
+    expect(r.notes[0].segmentId).toBe("R1234");
+    expect(r.unjudged).toEqual(["L999", "R1000"]);
+    expect(() => parseProject(JSON.stringify({ ...p, unjudged: ["L12"] }), DEMO)).toThrow(/未判定/);
+  });
+});

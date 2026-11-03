@@ -39,6 +39,18 @@ describe("OSM の道路をたどる", () => {
     expect(p.lengthM).toBeLessThan(160);
     expect(snapToRoad(graph, [138.1, 36.7])).toBeNull();
   });
+  it("起点と終点が同じ辺に落ちても、辺の端まで折り返さず直接つなぐ（辺を分割し、元の辺は外す）", () => {
+    const graph = buildGraph(WAYS);
+    const s1 = snapToRoad(graph, [137.9902, 36.6401])!; // 1-2 の辺の 2 割
+    const s2 = snapToRoad(graph, [137.9908, 36.6401])!; // 同じ辺の 8 割
+    const p = shortestPath(graph, s1.node, s2.node)!;
+    expect(p.coords.length).toBe(2);
+    expect(p.lengthM).toBeGreaterThan(50);
+    expect(p.lengthM).toBeLessThan(58); // 経度 0.0006 度 ≒ 54m
+    // 元の辺（1-2）は無く、1 → s1 → s2 → 2 とつながる
+    expect(graph.adj.get(1)!.some((e) => e.to === 2)).toBe(false);
+    expect(shortestPath(graph, 1, 2)!.coords.length).toBe(4);
+  });
   it("道路を取る範囲は起点・終点を囲み、問い合わせは highway の種類を絞る", () => {
     const b = routeBbox([137.99, 36.64], [137.992, 36.64]);
     expect(b[0]).toBeLessThan(137.99);

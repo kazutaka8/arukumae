@@ -325,28 +325,51 @@ function currentProject(state: AppState): ProjectFile {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistChain: Promise<void> = Promise.resolve();
+let persistPending: AppState | null = null;
 
 /**
  * この端末に残す。続けて何度も呼ばれるので少し待ってまとめ、書き込みは順に並べる。
- * 失敗したら（容量など）その旨を画面の上に出す。前に残したものは消えない（丸ごと書き換えるので、失敗なら古いまま）
+ * 失敗したら（容量など）その旨を画面の上に出す。前に残したものは消えない（丸ごと書き換えるので、失敗なら古いまま）。
+ * 画面が隠れる・閉じるときは待たずに書く（現地で × を押してすぐ端末を伏せ、タブが落ちても残るように。Claude の独立レビュー 2026-11-03）
  */
 function persist(state: AppState) {
+  persistPending = state;
   if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    const p = currentProject(state);
-    persistChain = persistChain.then(async () => {
-      try {
-        await saveStored(p);
-        state.saveError = null;
-      } catch (e) {
-        state.saveError = `この端末に残せませんでした（${(e as Error).message}）。案件ファイルに保存してください`;
-        console.warn(e);
-      }
-      showSaveState(state);
-    });
-  }, 250);
+  persistTimer = setTimeout(() => flushPersist(), 250);
 }
+
+function flushPersist() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = null;
+  const state = persistPending;
+  persistPending = null;
+  if (!state) return;
+  const p = currentProject(state);
+  // 読めるものしか書かない：書く前に案件ファイルと同じ検めを通す。通らないものを書くと、次に開いたとき見本に戻って判定が消える
+  try {
+    parseProject(JSON.stringify(p), { coords: state.demo.coords, roadName: state.demo.roadName });
+  } catch (e) {
+    state.saveError = `この端末に残せませんでした（保存の形が壊れています：${(e as Error).message}）。案件ファイルに保存してください`;
+    console.error(e);
+    showSaveState(state);
+    return;
+  }
+  persistChain = persistChain.then(async () => {
+    try {
+      await saveStored(p);
+      state.saveError = null;
+    } catch (e) {
+      state.saveError = `この端末に残せませんでした（${(e as Error).message}）。案件ファイルに保存してください`;
+      console.warn(e);
+    }
+    showSaveState(state);
+  });
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushPersist();
+});
+window.addEventListener("pagehide", flushPersist);
 
 function showSaveState(state: AppState) {
   const el = document.getElementById("save-state")!;
@@ -622,12 +645,12 @@ function renderStep(state: AppState) {
   );
   const fileStem = () => (state.roadName || state.name).replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 30) || "案件";
   body.querySelector("[data-csv]")?.addEventListener("click", () => {
-    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes);
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes, state.unjudged);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${fileStem()}_一覧表_${day}.csv`, toCsv(rows));
   });
   body.querySelector("[data-buy-csv]")?.addEventListener("click", () => {
-    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes);
+    const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes, state.unjudged);
     const day = new Date().toISOString().slice(0, 10);
     download(`arukumae_${fileStem()}_公図を買うリスト_${day}.csv`, toBuyCsv(buildBuyList(rows)));
   });
@@ -675,7 +698,7 @@ function renderProjectStep(state: AppState): string {
     `<dl class="kv"><dt>案件名</dt><dd><input class="text" data-name value="${escapeHtml(state.name)}" maxlength="60" aria-label="案件名"></dd>` +
       `<dt>道路名</dt><dd><input class="text" data-road value="${escapeHtml(state.roadName)}" maxlength="40" placeholder="県道○○号 ○○線（参考）" aria-label="道路名"></dd>` +
       `<dt>中心線 ${help(HELP.centerline)}</dt><dd>${escapeHtml(describeCenterline(c))}<br><span class="muted small">約 ${state.dense.length - 1} m・${c.coords.length} 点・${zoneLabel(state.zone)}で計算</span></dd>` +
-      `<dt>向き</dt><dd>${demo ? "南 → 北" : "地図の「起点 0m」→「終点」"} <button class="btn small" type="button" data-reverse>反転する</button></dd>` +
+      `<dt>向き</dt><dd>地図の「起点 0m」→「終点」${demo ? "（南 → 北。見本の向きは固定。判定が向きに合わせて付いているため）" : ` <button class="btn small" type="button" data-reverse>反転する</button>`}</dd>` +
       `<dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`,
   );
   if (state.projectMsg) parts.push(`<p class="small ${state.projectMsg.error ? "err" : ""}">${escapeHtml(state.projectMsg.text)}</p>`);
@@ -1299,7 +1322,8 @@ function renderFetch(fr: FetchRun): string {
   if (fr.phase === "choose") {
     parts.push(`<div class="row" style="display:flex;gap:6px;margin:6px 0"><input class="text" data-fetch-extra placeholder="市町村を足す（例：○○町）" aria-label="市町村を足す"><button class="btn small" data-fetch-add>探す</button></div>`);
     parts.push(`<p class="muted small">境に沿う道で隣の市町村が抜けていれば、名前で足せます。zip の名前が市区町村コードで始まるものだけを選びます（同名の町村を取り違えないため）。コードが分からない市町村は、タグの名前で探し、2 つ以上に当たれば見つからない扱いにします。</p>`);
-    const license = ready.find((it) => it.dataset?.licenseUrl)?.dataset?.licenseUrl ?? "https://www.geospatial.jp/ckan/dataset/houmusyouchizu-2026-1-995";
+    // 規約の PDF が無ければ、その市町村のデータセットのページ（規約はそこにある）
+    const license = ready.find((it) => it.dataset?.licenseUrl)?.dataset?.licenseUrl ?? ready[0]?.dataset?.datasetUrl ?? "https://www.geospatial.jp/ckan/organization/moj";
     parts.push(
       `<label class="row" style="display:flex;gap:6px;align-items:flex-start;font-size:13px;margin:8px 0"><input type="checkbox" data-fetch-agree ${fr.agreed ? "checked" : ""}> <span>登記所備付地図データの<a href="${escapeHtml(license)}" target="_blank" rel="noopener">利用規約（法務省）</a>を読み、同意します。取得したデータの出典「登記所備付地図データ ○○（法務省）」と「加工して作成」は、地図・書き出し・PDF に道具が付けます。</span></label>`,
     );
@@ -1508,6 +1532,7 @@ function fieldMapInput(state: AppState, day: string): FieldMapInput {
     notes: state.notes,
     cutLines: state.track.source.kind === "band" ? [] : cutLines,
     madeOn: day,
+    mojAttribution: mojAttribution(state.parcelSource.fromFile ? { fileName: "", maps: state.parcelSource.maps, skipped: [], features: [] } : null, !state.parcelSource.fromFile && state.centerline.source.kind === "demo"),
   };
 }
 

@@ -93,3 +93,15 @@ describe("ヘアピンの区切り", () => {
     expect(segs.filter((s) => s.side === "R").every((s) => s.toM - s.fromM <= 10)).toBe(true);
   });
 });
+
+describe("長い道の区切りの番号", () => {
+  it("10km を超えると 4 桁になり（L1000）、案件ファイルの番号の検め（/^[LR]\\d{3,}$/）と合う", () => {
+    const dense = resample([[0, 0], [10_050, 0]] as EN[], 1);
+    const segs = buildSegments(dense, leftNormals(dense));
+    const ids = segs.map((s) => s.id);
+    expect(ids).toContain("L999");
+    expect(ids).toContain("L1000");
+    expect(ids).toContain("R1004");
+    expect(ids.every((id) => /^[LR]\d{3,}$/.test(id))).toBe(true);
+  });
+});

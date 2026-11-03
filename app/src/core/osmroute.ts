@@ -65,8 +65,9 @@ export function buildGraph(ways: OsmWay[]): RoadGraph {
 let virtualId = -1;
 
 /**
- * 押した点を道路の上に寄せる。いちばん近い辺に足を下ろし、そこに仮の節点を足して辺の両端とつなぐ
+ * 押した点を道路の上に寄せる。いちばん近い辺に足を下ろし、そこに仮の節点を足して辺を 2 つに分ける
  * （いちばん近い既存の節点に寄せるだけだと、直線の道では節点が数百 m 離れていることがある）。
+ * 元の辺は外す。残すと、起点と終点が同じ辺に落ちたとき 2 つの仮の節点をつなぐ辺が無く、最短路が辺の端まで折り返す（Claude の独立レビュー 2026-11-03）。
  * maxDistM より遠ければ null（道路がない所を押した）
  */
 export function snapToRoad(g: RoadGraph, p: LonLat, maxDistM = 100): { node: number; dist: number } | null {
@@ -88,13 +89,16 @@ export function snapToRoad(g: RoadGraph, p: LonLat, maxDistM = 100): { node: num
   const id = virtualId--;
   g.nodes.set(id, best.q);
   g.adj.set(id, []);
+  const { a, b, way } = best;
+  g.adj.set(a, g.adj.get(a)!.filter((e) => !(e.to === b && e.way === way)));
+  g.adj.set(b, g.adj.get(b)!.filter((e) => !(e.to === a && e.way === way)));
   const link = (x: number, y: number) => {
     const w = distM(g.nodes.get(x)!, g.nodes.get(y)!);
-    g.adj.get(x)!.push({ to: y, w, way: best!.way });
-    g.adj.get(y)!.push({ to: x, w, way: best!.way });
+    g.adj.get(x)!.push({ to: y, w, way });
+    g.adj.get(y)!.push({ to: x, w, way });
   };
-  link(id, best.a);
-  link(id, best.b);
+  link(id, a);
+  link(id, b);
   return { node: id, dist: best.dist };
 }
 

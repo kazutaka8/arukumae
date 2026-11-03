@@ -90,7 +90,8 @@ const CONFS: Confidence[] = ["高", "中", "低"];
 const OTHERS = ["道路", "草地", "畑", "建物", "設備", "水", "裸地"];
 const PARCEL_KINDS: ParcelKind[] = ["ふつう", "道", "水", "無地番", "地区外", "別図", "筆界未定地"];
 const NOTE_RESULTS = ["○", "△", "×", ""];
-const SEG_ID = /^[LR]\d{3}$/;
+/** 区切りの番号。geom.ts は 3 桁に揃えて振るが、起点から 10km を超えると 4 桁になる（L1000）。3 桁だけに絞ると長い道の案件を読めなくなる（Claude の独立レビュー 2026-11-03） */
+const SEG_ID = /^[LR]\d{3,}$/;
 
 export const MAX_ZONE = 19;
 

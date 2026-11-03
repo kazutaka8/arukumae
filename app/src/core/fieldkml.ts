@@ -35,6 +35,8 @@ export interface FieldMapInput {
   /** 伐採範囲（掃く範囲の外側）。あれば線で入れる */
   cutLines?: Position[][];
   madeOn: string;
+  /** 公図の出典（「登記所備付地図データ ○○市（法務省）」）。省けば市町村なし */
+  mojAttribution?: string;
 }
 
 /** 木の割合 → KML の色（aabbggrr）。地図と同じ系統 */
@@ -260,7 +262,7 @@ export function fieldKml(input: FieldMapInput): string {
   const styles = Object.entries(STYLES)
     .map(([id, body]) => `    <Style id="${id}">${body}</Style>`)
     .join("\n");
-  const description = `${input.title}。アルクマエで ${input.madeOn} に作成。かかる筆は伐採範囲に重なる部分の形、区切りの色は航空写真から Claude が判定した木の割合（白 0% → 黄 25% → 橙 50% → 赤 75〜100%。人が直したものは名前に「人」）。下調べの資料で、現地で確かめる前提。公図は「おおよその位置と隣接関係」を示す図面で、境界は現地と違うことがある。出典：登記所備付地図データ（法務省）を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors`;
+  const description = `${input.title}。アルクマエで ${input.madeOn} に作成。かかる筆は伐採範囲に重なる部分の形、区切りの色は航空写真から Claude が判定した木の割合（白 0% → 黄 25% → 橙 50% → 赤 75〜100%。人が直したものは名前に「人」）。下調べの資料で、現地で確かめる前提。公図は「おおよその位置と隣接関係」を示す図面で、境界は現地と違うことがある。出典：${input.mojAttribution ?? "登記所備付地図データ（法務省）"}を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors`;
   const body = folders
     .map((fo) => {
       const pm = all
@@ -287,5 +289,5 @@ ${body}
 
 export function fieldGeoJSON(input: FieldMapInput): FeatureCollection & { title: string; description: string } {
   const features: Feature[] = items(input).map((i) => ({ type: "Feature", properties: { folder: i.folder, name: i.name, ...i.properties }, geometry: i.geometry }));
-  return { type: "FeatureCollection", title: input.title, description: `アルクマエで ${input.madeOn} に作成。下調べの資料で、現地で確かめる前提。出典：登記所備付地図データ（法務省）を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors`, features };
+  return { type: "FeatureCollection", title: input.title, description: `アルクマエで ${input.madeOn} に作成。下調べの資料で、現地で確かめる前提。出典：${input.mojAttribution ?? "登記所備付地図データ（法務省）"}を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors`, features };
 }

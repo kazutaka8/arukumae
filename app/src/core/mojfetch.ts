@@ -157,7 +157,8 @@ export function pickDataset(packages: CkanPackage[], name: string, code: string 
 
 export async function searchDataset(name: string, code: string | null, fetchFn: typeof fetch = fetch): Promise<MojDataset | null> {
   const q = `登記所備付地図データ ${name}`;
-  const res = await fetchFn(`${CKAN_SEARCH_URL}?q=${encodeURIComponent(q)}&rows=30`);
+  // 年版ごとに別のデータセットで、名前の語が多くの題名に入る市町村（「長野市」なら河内長野市も）では件数が増える。100 件まで取る
+  const res = await fetchFn(`${CKAN_SEARCH_URL}?q=${encodeURIComponent(q)}&rows=100`);
   if (!res.ok) throw new Error(`G空間情報センターが答えませんでした（HTTP ${res.status}）`);
   const json = (await res.json()) as { success?: boolean; result?: { results?: CkanPackage[] } };
   if (!json.success || !json.result) throw new Error("G空間情報センターの答えの形が違います");

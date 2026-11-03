@@ -57,6 +57,15 @@ describe("buildRows", () => {
     expect(r.決めたのは).toBe("");
   });
 
+  it("未判定（答えに番号がなかった区切り）も「現地で確かめる所」に出す（画面・KML・PDF と同じ並び）", async () => {
+    const { buildSegments, leftNormals, resample } = await import("./geom");
+    const dense = resample([[0, 0], [400, 0]] as [number, number][], 1);
+    const segs = buildSegments(dense, leftNormals(dense), { step: 10, roadHalf: 3, bandOut: 10 });
+    const judgments = new Map([["L032", j("L032", 100, "高")]]);
+    const [r] = buildRows([hit], parcels, judgments, [], "x", null, null, segs, null, new Set(["L033"]));
+    expect(r.現地で確かめる所).toContain("L033（未判定）");
+  });
+
   it("人が直した区切りが混じると「人・Claude」", () => {
     const judgments = new Map([["L032", j("L032", 100, "高", "人")], ["L033", j("L033", 50, "中")]]);
     expect(buildRows([hit], parcels, judgments, [], "x")[0].決めたのは).toBe("人・Claude");

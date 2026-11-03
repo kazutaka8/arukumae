@@ -39,14 +39,14 @@ function request<T>(r: IDBRequest<T>): Promise<T> {
   });
 }
 
-/** 残してある案件（形は検めない。読んだあと parseProject 相当の検めを通す） */
+/** 残してある案件（形は検めない。読んだあと parseProject 相当の検めを通す）。IndexedDB に無ければ localStorage も見る（書く側の落とし先） */
 export async function loadStored(): Promise<unknown | null> {
   if (hasIdb()) {
     try {
       const db = await openDb();
       try {
         const v = await request(db.transaction(STORE, "readonly").objectStore(STORE).get(KEY));
-        return v ?? null;
+        if (v) return v;
       } finally {
         db.close();
       }
@@ -68,18 +68,23 @@ export async function loadStored(): Promise<unknown | null> {
  */
 export async function saveStored(project: unknown): Promise<void> {
   if (hasIdb()) {
-    const db = await openDb();
     try {
-      const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).put(project, KEY);
-      await new Promise<void>((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error ?? new Error("IndexedDB に書けませんでした"));
-        tx.onabort = () => reject(tx.error ?? new Error("IndexedDB への書き込みが中断されました"));
-      });
-      return;
-    } finally {
-      db.close();
+      const db = await openDb();
+      try {
+        const tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).put(project, KEY);
+        await new Promise<void>((resolve, reject) => {
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error ?? new Error("IndexedDB に書けませんでした"));
+          tx.onabort = () => reject(tx.error ?? new Error("IndexedDB への書き込みが中断されました"));
+        });
+        return;
+      } finally {
+        db.close();
+      }
+    } catch (e) {
+      // 開けない・書けない（プライベートブラウズの制限など）なら localStorage に落とす。そこにも入らなければ投げる（呼ぶ側が画面に出す）
+      console.warn("IndexedDB に書けなかったので localStorage に残します", e);
     }
   }
   localStorage.setItem(FALLBACK_KEY, JSON.stringify(project));
