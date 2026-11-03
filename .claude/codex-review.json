@@ -1,0 +1,7 @@
+{
+  "_note": "重点パスは、計算と判定（app/src/core/：座標の換算・区切り・追従・筆の抽出・KP・書き出し・案件ファイル・公図の読み込み・Claude の呼び出し）、見本のデータの読み込み（app/src/data/）、公開する文書（README・docs/spec.md・data/README.md）、前処理（tools/）",
+  "critical_paths": ["app/src/core/", "app/src/data/", "app/src/map/", "tools/", "README.md", "docs/spec.md", "data/README.md"],
+  "min_lines": 200,
+  "spec_docs": ["docs/spec.md"],
+  "enabled": true
+}
