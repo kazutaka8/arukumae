@@ -45,14 +45,16 @@ describe("確かめる所の絞り込み", () => {
   const checks: Check[] = [
     { segmentId: "L001", kind: "低", why: "影", tree: 25 },
     { segmentId: "L003", kind: "森林", why: "区域の中なのに 0%", tree: 0 },
+    { segmentId: "L005", kind: "変化", why: "2022 年度の写真と比べて「木が減った」", tree: 0 },
     { segmentId: "L004", kind: "低", why: "ぼやけ", tree: 50 },
   ];
   it("種類と現地の記録で絞る", () => {
     const seg = (xs: Check[]) => xs.map((c) => c.segmentId);
-    expect(seg(filterChecks(checks, "all", ctx.notes))).toEqual(["L001", "L003", "L004"]);
+    expect(seg(filterChecks(checks, "all", ctx.notes))).toEqual(["L001", "L003", "L005", "L004"]);
+    expect(seg(filterChecks(checks, "change", ctx.notes))).toEqual(["L005"]);
     expect(seg(filterChecks(checks, "low", ctx.notes))).toEqual(["L001", "L004"]);
     expect(seg(filterChecks(checks, "forest", ctx.notes))).toEqual(["L003"]);
-    expect(seg(filterChecks(checks, "todo", ctx.notes))).toEqual(["L001"]);
+    expect(seg(filterChecks(checks, "todo", ctx.notes))).toEqual(["L001", "L005"]);
     expect(seg(filterChecks(checks, "ng", ctx.notes))).toEqual(["L003"]);
     expect(seg(filterChecks(checks, "done", ctx.notes))).toEqual(["L003", "L004"]);
   });

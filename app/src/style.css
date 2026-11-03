@@ -120,6 +120,10 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .badge.high { background: #e8f5e9; color: #2e7d32; }
 .badge.human { background: #e3f2fd; color: #1565c0; }
 .badge.forest { background: #e8f5e9; color: #2e7d32; }
+.badge.change { background: #ede7f6; color: #4527a0; }
+.legend-body label.year { gap: 6px; }
+.legend-body label.year select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; }
+.seg-photo-pair:has(figure:nth-child(3)) { grid-template-columns: 1fr 1fr 1fr; }
 
 /* 一覧の列（タブで「かかる筆」「確かめる所」を切り替える） */
 .tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); background: #fafbfc; }

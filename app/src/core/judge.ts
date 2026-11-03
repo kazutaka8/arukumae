@@ -3,11 +3,13 @@
  *
  * - 鍵は利用者のもの。このブラウザから Anthropic に直接送り、作り手のサーバーは通らない（spec §12）
  * - 送るのは航空写真の切り抜き2枚と区切りの番号だけ。座標・地名・案件名は送らない（spec §8.7）
+ * - 別の年の写真（地理院の年度別写真）を一緒に見せることもできる（F11）。試し（spec §15）で、1 枚では 25% と少なく見た区切りが
+ *   2 枚で 75〜100% になり、変化（造成など）も拾えた。問いかけは experiments/case_c/run_multi.py の SYSTEM_MULTI を移した
  * - 答えは json_schema で形を固め、tree は 0・25・50・75・100 のどれかにする
  */
 import Anthropic from "@anthropic-ai/sdk";
-import type { WindowImages } from "./photo";
-import type { Confidence, Judgment, TreeKind } from "./types";
+import { photoLayerLabel, type WindowImages } from "./photo";
+import { PHOTO_CHANGES, type Confidence, type Judgment, type PhotoChange, type TreeKind } from "./types";
 
 export const MODELS = {
   "claude-sonnet-5-5": "Claude Sonnet 5.5",
@@ -27,6 +29,8 @@ const PRICE: Record<ModelId, [number, number]> = {
 const TOKENS_PER_WINDOW = { in: 4300, out: 2400 };
 /** 見直しは区切りを絞るので出力が少ない。確信「低」は試しで 13〜17% だったので、窓の半分に見直しが出ると見る */
 const REVIEW = { in: 4300, out: 800, windowRate: 0.5 };
+/** 別の年の写真も見せると、画像が 4 枚になり入力はほぼ 2 倍、答えの欄が増えて出力は 1.3 倍ほど（試しの実測から） */
+const TWO_PHOTOS = { in: 2.0, out: 1.3 };
 
 const KINDS: TreeKind[] = ["針葉樹", "広葉樹", "混じる", "分からない", "なし"];
 const OTHERS = ["道路", "草地", "畑", "建物", "設備", "水", "裸地"];
@@ -49,7 +53,27 @@ const SYSTEM = `あなたは、道路沿いの土地の下調べを手伝いま�
 木の高さは写真からは分からないので、考えに入れないでください。迷ったら、木がある側に倒し、確信を下げてください（見落としより、現地で確かめる所が増えるほうがよい）。
 指定した番号には、すべて1回ずつ答えてください。`;
 
-function schema(ids: string[]) {
+const SYSTEM_TWO = (oldYear: string) => `あなたは、道路沿いの土地の下調べを手伝います。目的は、大型車両の通行に向けて木を切ることになりそうな所を、現地を歩く前に洗い出すことです。最後に決めるのは人で、あなたの判定は現地で確かめる前の候補として使われます。
+
+同じ範囲を、撮影日の違う2枚の航空写真で渡します（どちらも真上から、約 0.5m／画素を3倍に拡大。表示の縮尺はほぼ同じで、上が北）。
+- 写真A：いちばん新しい写真（国土地理院の全国最新写真）
+- 写真B：${oldYear}年度の写真（国土地理院）。写真A と同じ年か、それより古い
+それぞれ札なしの写真と、道路沿いの「区切り」の枠と番号を描いた写真を渡します。区切りは道路の端から外側へ、道に沿って10mずつ。黄色の枠が進行方向の左（L）、水色の枠が右（R）。2枚の写真で、同じ番号は同じ場所です。写真B に写真のない所（黒や空白）があれば、その区切りは写真A だけで判定し、change は「分からない」にしてください。
+
+区切りごとに答えること：
+- tree：新しい写真A での、区切りの面積のうち木の樹冠に覆われている割合（0・25・50・75・100）
+- treeOld：写真B での同じ割合
+- kind：樹冠の種類（針葉樹・広葉樹・混じる・分からない。木がなければ「なし」）。2枚で季節や影が違えば、見分けやすいほうを使う
+- other：写真A で、木のほかに区切りに写っているもの（道路・草地・畑・建物・設備・水・裸地。なければ空）
+- change：2枚の間の変化（変化なし・木が減った・木が増えた・造成や建物の変化・分からない）
+- conf：今の状態（tree）についての確信（高・中・低）。2枚で影や見え方が違って一方でしか見えない所は、見えるほうを使って確信を決める。変化があった所は、どちらが今の状態かを写真A で確かめたうえで、確信を下げる
+- why：判定の理由を、日本語で短く。2枚を見比べて分かったことがあれば書く
+
+木の高さは写真からは分からないので、考えに入れないでください。迷ったら、木がある側に倒し、確信を下げてください（見落としより、現地で確かめる所が増えるほうがよい）。
+指定した番号には、すべて1回ずつ答えてください。`;
+
+function schema(ids: string[], two = false) {
+  const extra = two ? { treeOld: { type: "integer", enum: [0, 25, 50, 75, 100] }, change: { type: "string", enum: [...PHOTO_CHANGES] } } : {};
   return {
     type: "object",
     properties: {
@@ -60,12 +84,13 @@ function schema(ids: string[]) {
           properties: {
             id: { type: "string", enum: ids },
             tree: { type: "integer", enum: [0, 25, 50, 75, 100] },
+            ...extra,
             kind: { type: "string", enum: KINDS },
             other: { type: "array", items: { type: "string", enum: OTHERS } },
             conf: { type: "string", enum: ["高", "中", "低"] },
             why: { type: "string" },
           },
-          required: ["id", "tree", "kind", "other", "conf", "why"],
+          required: ["id", "tree", ...Object.keys(extra), "kind", "other", "conf", "why"],
           additionalProperties: false,
         },
       },
@@ -94,26 +119,35 @@ export function makeClient(apiKey: string): Anthropic {
  * 1窓を判定する。ids を絞れば、同じ写真でその区切りだけ答えさせる（見直しに使う）。
  * 見直しのときに最初の判定を添えないのは、添えると引きずられて「別のモデルの目」にならないため。
  */
-export async function judgeWindow(client: Anthropic, model: ModelId, images: WindowImages, ids: string[] = images.ids): Promise<JudgeResult> {
+export async function judgeWindow(client: Anthropic, model: ModelId, images: WindowImages, ids: string[] = images.ids, second?: WindowImages): Promise<JudgeResult> {
   const t0 = performance.now();
+  const img = (data: string) => ({ type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data } });
+  const content = second
+    ? [
+        { type: "text" as const, text: "写真A（全国最新写真・札なし）" },
+        img(images.plain),
+        { type: "text" as const, text: "写真A（区切りの枠と番号）" },
+        img(images.labeled),
+        { type: "text" as const, text: `写真B（${photoLayerLabel(second.layer)}・札なし）` },
+        img(second.plain),
+        { type: "text" as const, text: "写真B（区切りの枠と番号）" },
+        img(second.labeled),
+        { type: "text" as const, text: "判定する区切り：" + ids.join("、") },
+      ]
+    : [
+        { type: "text" as const, text: "1枚目（札なし）" },
+        img(images.plain),
+        { type: "text" as const, text: "2枚目（区切りの枠と番号）" },
+        img(images.labeled),
+        { type: "text" as const, text: "判定する区切り：" + ids.join("、") },
+      ];
   const msg = await client.beta.messages
     .stream({
       model,
       max_tokens: 32000,
-      system: SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "1枚目（札なし）" },
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: images.plain } },
-            { type: "text", text: "2枚目（区切りの枠と番号）" },
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: images.labeled } },
-            { type: "text", text: "判定する区切り：" + ids.join("、") },
-          ],
-        },
-      ],
-      output_config: { effort: "medium", format: { type: "json_schema", schema: schema(ids) } },
+      system: second ? SYSTEM_TWO(second.layer) : SYSTEM,
+      messages: [{ role: "user", content }],
+      output_config: { effort: "medium", format: { type: "json_schema", schema: schema(ids, !!second) } },
       // 混んでいて断られたときに別のモデルで続ける。どのモデルが答えたかは usage に残る
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
@@ -126,21 +160,33 @@ export async function judgeWindow(client: Anthropic, model: ModelId, images: Win
   let judgments: Judgment[] = [];
   if (!refused) {
     const text = msg.content.find((b) => b.type === "text")?.text ?? "{}";
-    const parsed = JSON.parse(text) as { segments: { id: string; tree: number; kind: TreeKind; other: string[]; conf: Confidence; why: string }[] };
+    const parsed = JSON.parse(text) as { segments: { id: string; tree: number; treeOld?: number; change?: PhotoChange; kind: TreeKind; other: string[]; conf: Confidence; why: string }[] };
     judgments = parsed.segments
       .filter((s) => ids.includes(s.id))
-      .map((s) => ({ segmentId: s.id, tree: s.tree, kind: s.kind, other: s.other, conf: s.conf, why: s.why, by: "Claude", model }));
+      .map((s) => ({
+        segmentId: s.id,
+        tree: s.tree,
+        kind: s.kind,
+        other: s.other,
+        conf: s.conf,
+        why: s.why,
+        by: "Claude" as const,
+        model,
+        ...(second ? { oldYear: second.layer, treeOld: s.treeOld, change: s.change } : {}),
+      }));
   }
   return { judgments, model, seconds, inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, usd, refused };
 }
 
 /** 押す前に出す費用の目安（$）。spec §6.1「費用がかかる操作は、押す前に目安を出す」 */
-export function estimateCost(nWindows: number, model: ModelId, review: ModelId | ""): number {
+export function estimateCost(nWindows: number, model: ModelId, review: ModelId | "", twoPhotos = false): number {
+  const fin = twoPhotos ? TWO_PHOTOS.in : 1;
+  const fout = twoPhotos ? TWO_PHOTOS.out : 1;
   const [pin, pout] = PRICE[model];
-  let usd = (nWindows * (TOKENS_PER_WINDOW.in * pin + TOKENS_PER_WINDOW.out * pout)) / 1e6;
+  let usd = (nWindows * (TOKENS_PER_WINDOW.in * fin * pin + TOKENS_PER_WINDOW.out * fout * pout)) / 1e6;
   if (review) {
     const [rin, rout] = PRICE[review];
-    usd += (nWindows * REVIEW.windowRate * (REVIEW.in * rin + REVIEW.out * rout)) / 1e6;
+    usd += (nWindows * REVIEW.windowRate * (REVIEW.in * fin * rin + REVIEW.out * fout * rout)) / 1e6;
   }
   return usd;
 }

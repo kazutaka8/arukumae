@@ -105,6 +105,10 @@ export function buildLayout(root: HTMLElement) {
             <option value="">見直さない</option>
           </select>
         </label>
+        <label>別の年の写真も一緒に見せる（地理院の年度別写真）
+          <select id="photo-second"><option value="">見せない（全国最新写真だけ）</option></select>
+        </label>
+        <p class="muted small">2 枚を見比べると見落としが減り、「木が減った」「造成された」などの変化も拾えます（費用は約 2 倍）。その年の写真がない窓は 1 枚で判定します。</p>
         <p class="muted small">鍵はこの端末から Anthropic に直接送ります。作り手のサーバーは通りません。送る画像は公開の航空写真の切り抜きだけで、場所の座標や案件名は送りません。</p>
         <div class="row end"><button class="btn" value="ok">閉じる</button></div>
       </form>

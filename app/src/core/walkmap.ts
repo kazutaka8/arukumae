@@ -573,7 +573,7 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
   drawRow(cols.map((c) => c.label), true);
   const filled = rows.map((r) => {
     const n = input.notes?.get(r.id);
-    return [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, `${r.kind === "森林" ? "森林：" : ""}${r.why}`, n?.result ? `${n.result} 済` : "○  ×", n?.memo ?? ""];
+    return [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, `${r.kind === "低" ? "" : `${r.kind}：`}${r.why}`, n?.result ? `${n.result} 済` : "○  ×", n?.memo ?? ""];
   });
   while (filled.length < 3) filled.push(["", "", "", "", "○  ×", ""]);
   for (const r of filled) drawRow(r, false);

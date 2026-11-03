@@ -11,7 +11,7 @@ import { leftNormals, nearestOnLine, resample, type Segment } from "./core/geom"
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./core/kp";
 import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
-import { renderSegmentCrop, renderWindow, windowsOf } from "./core/photo";
+import { PHOTO_YEARS, photoLayerLabel, renderSegmentCrop, renderWindow, windowsOf, type PhotoLayer } from "./core/photo";
 import { toLonLat, toPlane, type EN } from "./core/proj";
 import { linesToPlane, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
 import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
@@ -25,7 +25,7 @@ import { countNotes, NOTE_RESULTS, noteText, pruneNotes, type FieldNote, type No
 import { kindLabel, NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
-import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setSourceData, type LayerGroup } from "./map/map";
+import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setPhotoYear, setSourceData, type LayerGroup } from "./map/map";
 import { buildLayout, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
 
 interface AppState {
@@ -84,6 +84,8 @@ interface AppState {
   projectMsg: { text: string; error: boolean } | null;
   /** 一覧の絞り込み。地図は絞らない（filter.ts） */
   filter: { hits: HitFilter; q: string; checks: CheckFilter };
+  /** 地図に重ねる写真の年（地理院の年度別写真）。null なら全国最新写真だけ */
+  photoYear: PhotoLayer | null;
 }
 
 interface ParcelSource {
@@ -181,6 +183,7 @@ async function main() {
     name: localStorage.getItem(NAME_KEY) || DEFAULT_NAME,
     projectMsg: null,
     filter: { hits: "all", q: "", checks: "all" },
+    photoYear: loadPhotoYear(),
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
@@ -195,6 +198,7 @@ async function main() {
     for (const h of state.hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
     wireMapClicks(state);
     renderLegend(state);
+    setPhotoYear(map, state.photoYear);
   });
 
   showName(state);
@@ -228,6 +232,12 @@ const HELP = {
   project:
     "案件ファイル：この端末に残しているもの（伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録・案件名）を 1 つの JSON にまとめたもの。事務所の PC で判定して保存し、iPad に送って読み込めば続きができます。現地で記録したら、また保存して PC に戻します。軌跡図の座標が入るので、利用者の手元に置くファイルです。道具が外へ送ることはありません。",
   kind: "種類：公図の地番の頭で分けたもの。「道」「水」は地番のない道路・水路、「無地番」は地番のない土地、「筆界未定地」は境界の決まっていない所、「一般」は地番のついたふつうの土地です。地目（宅地・田・山林など）は公図に入っていないので、ここでは分かりません。",
+  photoYear:
+    "写真の年：国土地理院の年度別写真（2007 年以降）を最新写真の上に重ねます。ある年と場所は限られ、無い所は下の最新写真が透けて見えます。小川村の見本の範囲は 2022 年度だけで、最新写真と同じ写真です（2026-11-02 に確かめた）。木を判定するときに「別の年の写真も一緒に見せる」のは、右上の「設定」で選びます。",
+  earth:
+    "Google Earth で見る：別の窓で Google Earth（ウェブ）をこの場所で開きます。過去の写真は Google Earth の「履歴」で見られます。人が見るためのリンクで、道具は Google の画像を取り込みません。Google の地図の規約は、画像を解析したり機械に読ませたりすることを認めていないためです（自分の理解）。",
+  change:
+    "変化：別の年の写真と比べて Claude が「木が減った」「造成や建物の変化」などと見た区切り。もう切られている、太陽光になっている、といった手がかりになります。現地で確かめる所に入ります。",
   filter: "絞り込み：一覧だけを絞ります。地図はそのままです（行を押せば地図が飛びます）。地番・所在の文字での検索は、種類と重ねられます。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
 };
@@ -272,7 +282,8 @@ function renderStep(state: AppState) {
       const lows = checkList(state);
       const reviewed = [...state.judgments.values()].filter((j) => j.before);
       const forestN = lows.filter((c) => c.kind === "森林").length;
-      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN}・森林の区域と食い違う ${forestN}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
+      const changeN = lows.filter((c) => c.kind === "変化").length;
+      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN - changeN}・森林の区域と食い違う ${forestN}${changeN ? `・別の年の写真と比べて変化 ${changeN} ${help(HELP.change)}` : ""}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
       // 前へ・次へは、一覧で絞り込んだ中を回る。現地で「まだ見ていない所」だけを順に回れるように
       const vis = visibleChecks(state);
       const narrowed = vis.length !== lows.length ? `（絞り込み ${help(HELP.filter)}）` : "";
@@ -1002,7 +1013,7 @@ function trackGeo(state: AppState) {
 }
 
 function renderJudgeStep(state: AppState): string {
-  const { model, review } = getSettings();
+  const { model, review, photo2 } = getSettings();
   const windows = windowsOf(state.segments);
   const judged = state.judgments.size;
   const byClaude = [...state.judgments.values()].filter((j) => j.by === "Claude").length;
@@ -1018,11 +1029,11 @@ function renderJudgeStep(state: AppState): string {
     parts.push(`<pre class="log">${r.log.map((l) => (l.startsWith("!") ? `<span class="err">${escapeHtml(l.slice(1))}</span>` : escapeHtml(l))).join("\n")}</pre>`);
     parts.push(`<div class="actions"><button class="btn" data-cancel ${r.cancel ? "disabled" : ""}>${r.cancel ? "止めています…" : "止める"}</button></div>`);
   } else {
-    const usd = estimateCost(windows.length, model, review);
+    const usd = estimateCost(windows.length, model, review, !!photo2);
     parts.push(
       `<div class="actions"><button class="btn primary" data-judge ${hasKey ? "" : "disabled"}>${judged ? "全部を判定し直す" : "木を判定する"} <span class="cost">約 ${fmtUsd(usd)}</span></button>` +
         (hasKey
-          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。送るのは航空写真の切り抜きだけです。</p>`
+          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。${photo2 ? `${photoLayerLabel(photo2)}も一緒に見せ、変化を拾います（設定で変えられます）。` : ""}送るのは航空写真の切り抜きだけです。</p>`
           : `<p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります。</p>`) +
         `</div>`,
     );
@@ -1036,7 +1047,7 @@ function renderJudgeStep(state: AppState): string {
 async function runJudging(state: AppState) {
   const key = getApiKey();
   if (!key || state.run) return;
-  const { model, review } = getSettings();
+  const { model, review, photo2 } = getSettings();
   const client = makeClient(key);
   const windows = windowsOf(state.segments);
   state.run = { done: 0, total: windows.length, usd: 0, log: [], cancel: false };
@@ -1051,7 +1062,13 @@ async function runJudging(state: AppState) {
     const label = `${segs[0].fromM}〜${segs.at(-1)!.toM}m`;
     try {
       const images = await renderWindow(segs);
-      const main = await judgeWindow(client, model, images);
+      // 別の年の写真（F11）。その年の写真がこの窓に 1 枚もなければ、1 枚だけで判定する
+      let second = photo2 ? await renderWindow(segs, photo2) : undefined;
+      if (second && second.coverage === 0) {
+        log(`　窓 ${k + 1}：${photoLayerLabel(photo2)}はこの範囲にないので、最新写真だけで判定します`);
+        second = undefined;
+      }
+      const main = await judgeWindow(client, model, images, images.ids, second);
       if (state.run) state.run.usd += main.usd;
       if (main.refused) {
         log(`!窓 ${k + 1}（${label}）：モデルが答えませんでした`);
@@ -1060,14 +1077,14 @@ async function runJudging(state: AppState) {
         log(`窓 ${k + 1}（${label}）：${main.judgments.length} 区切り、${Math.round(main.seconds)}秒、${fmtUsd(main.usd)}`);
         const lows = main.judgments.filter((j) => j.conf === "低").map((j) => j.segmentId);
         if (review && lows.length && !state.run?.cancel) {
-          const second = await judgeWindow(client, review, images, lows);
-          if (state.run) state.run.usd += second.usd;
-          for (const j of second.judgments) {
+          const rev = await judgeWindow(client, review, images, lows, second);
+          if (state.run) state.run.usd += rev.usd;
+          for (const j of rev.judgments) {
             const first = state.judgments.get(j.segmentId)!;
             state.judgments.set(j.segmentId, { ...j, before: { tree: first.tree, conf: first.conf, model: first.model } });
           }
-          const changed = second.judgments.filter((j) => j.tree !== state.judgments.get(j.segmentId)!.before!.tree).length;
-          log(`　見直し ${lows.length} 区切り（${MODELS[review]}）：${changed} 区切りで木の割合が変わりました、${fmtUsd(second.usd)}`);
+          const changed = rev.judgments.filter((j) => j.tree !== state.judgments.get(j.segmentId)!.before!.tree).length;
+          log(`　見直し ${lows.length} 区切り（${MODELS[review]}）：${changed} 区切りで木の割合が変わりました、${fmtUsd(rev.usd)}`);
         }
       }
     } catch (e) {
@@ -1167,7 +1184,7 @@ function renderChecks(state: AppState) {
       const seg = state.segments.find((s) => s.id === c.segmentId);
       const j = state.judgments.get(c.segmentId);
       const side = c.segmentId.startsWith("L") ? "左" : "右";
-      const tag = c.kind === "森林" ? `<span class="badge forest">森林</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
+      const tag = c.kind === "森林" ? `<span class="badge forest">森林</span>` : c.kind === "変化" ? `<span class="badge change">変化</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
       return `<tr data-seg="${c.segmentId}" class="${c.segmentId === state.selectedSegment ? "selected" : ""}">
         <td class="num">${i + 1}</td><td class="num">${seg ? `${seg.fromM}〜${seg.toM}` : ""}</td><td>${side}</td>
         <td class="num">${c.tree}%</td><td>${tag}</td>
@@ -1305,6 +1322,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
       ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
       ${h ? `<dt>木（推定）</dt><dd>${tree ? `最大 ${tree.tree}%（${tree.n} 区切り）` : '<span class="muted">まだ判定していません</span>'}</dd>` : ""}
       ${h ? `<dt>KP（推定）</dt><dd>${kpText(state, (h.fromM + h.toM) / 2)}</dd>` : ""}
+      <dt>外で見る</dt><dd>${earthLink(ringCenter(h ? h.shape.coordinates[0][0] : p.geometry.coordinates[0]))}</dd>
       ${h ? `<dt>森林の区域</dt><dd>${state.forest ? escapeHtml(forestText(state.forest.get(h.parcelId))) + (noticeText(state.forest.get(h.parcelId)) ? `<br><span class="badge low">届出が要るかもしれない（市町村に確かめる）</span>` : "") : `<span class="muted">${escapeHtml(state.forestNote)}</span>`} ${help(HELP.forest)}</dd>` : ""}
       <dt>地図</dt><dd>${p.properties.map}</dd>
     </dl>
@@ -1331,6 +1349,7 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
     `<dl class="kv">
       <dt>場所</dt><dd>起点から ${f.properties!.fromM}〜${f.properties!.toM} m の${side}</dd>
       <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
+      <dt>外で見る</dt><dd>${earthLink(ringCenter(f.geometry.coordinates[0]))}</dd>
       <dt>面積</dt><dd>${f.properties!.areaM2} m²</dd>
       <dt>外側</dt><dd>中心線から ${f.properties!.outerMaxM} m まで ${help(HELP.band)}</dd>
       ${state.segForest?.get(id) ? `<dt>森林の区域</dt><dd>${Math.round(state.segForest.get(id)!.ratio * 100)}% が区域の中${state.forestFlags?.get(id) ? `<br><span class="badge forest">食い違い</span> <span class="small">${escapeHtml(state.forestFlags.get(id)!)}</span>` : ""}</dd>` : ""}
@@ -1342,7 +1361,8 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
              <dt>確信</dt><dd><span class="badge ${confClass}">${j.conf}</span></dd>
              <dt>理由</dt><dd>${escapeHtml(j.why)}</dd>
              <dt>決めたのは</dt><dd><span class="badge ${j.by === "人" ? "human" : ""}">${j.by}${j.model ? `（${shortModel(j.model)}）` : ""}</span></dd>
-             ${j.before ? `<dt>最初の判定</dt><dd class="muted">${j.before.tree}%・確信 ${j.before.conf}（${shortModel(j.before.model ?? "")}）→ 見直しました</dd>` : ""}`
+             ${j.before ? `<dt>最初の判定</dt><dd class="muted">${j.before.tree}%・確信 ${j.before.conf}（${shortModel(j.before.model ?? "")}）→ 見直しました</dd>` : ""}
+             ${j.oldYear ? `<dt>別の年</dt><dd>${j.oldYear} 年度の写真では ${j.treeOld ?? "?"}%。変化：<b>${j.change ?? "分からない"}</b> ${help(HELP.change)}</dd>` : ""}`
           : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
       }
     </dl>
@@ -1367,11 +1387,15 @@ async function showSegmentPhoto(state: AppState, id: string) {
   if (!win || !box) return;
   try {
     const crop = await renderSegmentCrop(win, id);
+    // 判定に別の年の写真を使っていれば、その年の切り抜きも並べる（何を見比べたかを人が確かめられるように）
+    const oldYear = state.judgments.get(id)?.oldYear;
+    const old = oldYear ? await renderSegmentCrop(win, id, 25, oldYear) : null;
     // 待っている間に別の区切りが選ばれていたら出さない
     if (!crop || state.selectedSegment !== id) return;
     const target = document.querySelector<HTMLElement>("[data-seg-photo]");
     if (!target) return;
-    target.innerHTML = `<div class="seg-photo-pair"><figure><img src="data:image/jpeg;base64,${crop.plain}" alt="札なし"><figcaption>札なし</figcaption></figure><figure><img src="data:image/jpeg;base64,${crop.labeled}" alt="札あり"><figcaption>札あり（枠と番号）</figcaption></figure></div><p class="muted small">Claude に送ったのと同じ描き方（地理院の航空写真、z18 を 3 倍）。この区切りの周り 25m を切り出したもの。出典：国土地理院（地理院タイル）を加工</p>`;
+    const fig = (data: string, cap: string) => `<figure><img src="data:image/jpeg;base64,${data}" alt="${cap}"><figcaption>${cap}</figcaption></figure>`;
+    target.innerHTML = `<div class="seg-photo-pair">${fig(crop.plain, "札なし")}${fig(crop.labeled, "札あり（枠と番号）")}${old ? fig(old.plain, `${oldYear} 年度`) : ""}</div><p class="muted small">Claude に送ったのと同じ描き方（地理院の航空写真、z18 を 3 倍）。この区切りの周り 25m を切り出したもの。出典：国土地理院（地理院タイル）を加工</p>`;
   } catch {
     box.innerHTML = `<span class="muted small">写真を切り出せませんでした</span>`;
   }
@@ -1682,7 +1706,11 @@ async function exportWalkMap(state: AppState, withPhoto: boolean) {
 
 function renderLegend(state: AppState) {
   const groups: { key: LayerGroup; label: string; sub?: string; indent?: boolean }[] = [
-    { key: "photo", label: "航空写真（国土地理院）" },
+    {
+      key: "photo",
+      label: "航空写真（国土地理院）",
+      sub: `<label class="year">年 ${help(HELP.photoYear)} <select id="photo-year"><option value="">最新</option>${PHOTO_YEARS.map((y) => `<option value="${y}" ${state.photoYear === y ? "selected" : ""}>${y} 年度</option>`).join("")}</select></label>`,
+    },
     { key: "forest", label: "森林計画の対象森林（林野庁）", sub: `<span><i class="sw" style="background:#43a04730;border-color:#2e7d32"></i>民有林</span><span><i class="sw" style="background:#1b5e2040;border-color:#1b5e20"></i>国有林</span>` },
     {
       key: "parcels",
@@ -1711,8 +1739,19 @@ function renderLegend(state: AppState) {
     .map((g) => `<label class="${g.indent ? "indent" : ""}"><input type="checkbox" data-group="${g.key}" checked> ${g.label}</label>${g.sub ? `<div class="sub">${g.sub}</div>` : ""}`)
     .join("");
   document.querySelectorAll<HTMLInputElement>("[data-group]").forEach((cb) =>
-    cb.addEventListener("change", () => setGroupVisible(state.map, cb.dataset.group as LayerGroup, cb.checked)),
+    cb.addEventListener("change", () => {
+      setGroupVisible(state.map, cb.dataset.group as LayerGroup, cb.checked);
+      // 写真の群は年度別の層も含む。年を選んでいないときは年度別の層を出さない
+      if (cb.dataset.group === "photo") setPhotoYear(state.map, state.photoYear, cb.checked);
+    }),
   );
+  document.getElementById("photo-year")?.addEventListener("change", (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    state.photoYear = v || null;
+    localStorage.setItem(PHOTO_YEAR_KEY, state.photoYear ?? "");
+    const on = document.querySelector<HTMLInputElement>('[data-group="photo"]')?.checked ?? true;
+    setPhotoYear(state.map, state.photoYear, on);
+  });
 }
 
 /* ---------- 設定（鍵・モデル） ---------- */
@@ -1721,10 +1760,28 @@ function getApiKey(): string {
   return localStorage.getItem("arukumae.apiKey") ?? sessionStorage.getItem("arukumae.apiKey") ?? "";
 }
 
-function getSettings(): { model: ModelId; review: ModelId | "" } {
+const PHOTO_YEAR_KEY = "arukumae.photoYear";
+
+function loadPhotoYear(): PhotoLayer | null {
+  const v = localStorage.getItem(PHOTO_YEAR_KEY) ?? "";
+  return PHOTO_YEARS.includes(v) ? v : null;
+}
+
+/** Google Earth（ウェブ）をその場所で開くリンク。人が見るためのもので、画像は取り込まない（HELP.earth） */
+function earthLink([lon, lat]: [number, number]): string {
+  return `<a href="https://earth.google.com/web/@${lat.toFixed(6)},${lon.toFixed(6)},0a,300d,35y,0h,0t,0r" target="_blank" rel="noopener">Google Earth で見る ↗</a> ${help(HELP.earth)}`;
+}
+
+function ringCenter(ring: Position[]): [number, number] {
+  const pts = ring.length > 1 ? ring.slice(0, -1) : ring;
+  return [pts.reduce((s, c) => s + c[0], 0) / pts.length, pts.reduce((s, c) => s + c[1], 0) / pts.length];
+}
+
+function getSettings(): { model: ModelId; review: ModelId | ""; photo2: PhotoLayer | "" } {
   const model = (localStorage.getItem("arukumae.model") as ModelId | null) ?? "claude-sonnet-5-5";
   const review = (localStorage.getItem("arukumae.review") ?? "claude-fable-5-1") as ModelId | "";
-  return { model: model in MODELS ? model : "claude-sonnet-5-5", review: review === "" || review in MODELS ? review : "claude-fable-5-1" };
+  const photo2 = localStorage.getItem("arukumae.photo2") ?? "";
+  return { model: model in MODELS ? model : "claude-sonnet-5-5", review: review === "" || review in MODELS ? review : "claude-fable-5-1", photo2: PHOTO_YEARS.includes(photo2) ? photo2 : "" };
 }
 
 function wireSettings(state: AppState) {
@@ -1732,12 +1789,15 @@ function wireSettings(state: AppState) {
   const remember = document.getElementById("remember-key") as HTMLInputElement;
   const modelSel = document.getElementById("model-main") as HTMLSelectElement;
   const reviewSel = document.getElementById("model-review") as HTMLSelectElement;
+  const photoSel = document.getElementById("photo-second") as HTMLSelectElement;
+  for (const y of PHOTO_YEARS) photoSel.add(new Option(`${y} 年度の写真`, y));
   // 既定はその場限り（sessionStorage）。「記憶する」を選んだときだけ localStorage に残す（spec §12）
   key.value = getApiKey();
   remember.checked = localStorage.getItem("arukumae.apiKey") !== null;
   const { model, review } = getSettings();
   modelSel.value = model;
   reviewSel.value = review;
+  photoSel.value = getSettings().photo2;
   const save = () => {
     const v = key.value.trim();
     sessionStorage.setItem("arukumae.apiKey", v);
@@ -1745,9 +1805,10 @@ function wireSettings(state: AppState) {
     else localStorage.removeItem("arukumae.apiKey");
     localStorage.setItem("arukumae.model", modelSel.value);
     localStorage.setItem("arukumae.review", reviewSel.value);
+    localStorage.setItem("arukumae.photo2", photoSel.value);
     if (state.step === 4) renderStep(state); // 鍵の有無と費用の目安をボタンに反映する
   };
-  for (const el of [key, remember, modelSel, reviewSel]) el.addEventListener("change", save);
+  for (const el of [key, remember, modelSel, reviewSel, photoSel]) el.addEventListener("change", save);
   document.getElementById("settings-dialog")!.addEventListener("close", save);
 }
 

@@ -29,6 +29,8 @@ export interface ParcelProps {
 }
 
 export type Confidence = "高" | "中" | "低";
+export const PHOTO_CHANGES = ["変化なし", "木が減った", "木が増えた", "造成や建物の変化", "分からない"] as const;
+export type PhotoChange = (typeof PHOTO_CHANGES)[number];
 export type TreeKind = "針葉樹" | "広葉樹" | "混じる" | "分からない" | "なし";
 
 /** 区切り1つの判定。Claude が返した候補か、人が直した値 */
@@ -45,6 +47,10 @@ export interface Judgment {
   model?: string;
   /** 見直しのモデルが見たとき、最初の判定が何だったか（違いを見せるため） */
   before?: { tree: number; conf: Confidence; model?: string };
+  /** 別の年の写真も一緒に見せたとき（F11）：その年、その写真での木の割合、2 枚の間の変化 */
+  oldYear?: string;
+  treeOld?: number;
+  change?: PhotoChange;
   /** 人が直す前の判定（F10）。「元に戻す」に使う。入れ子にはしない（直す前の prev は持たない） */
   prev?: Omit<Judgment, "prev">;
 }

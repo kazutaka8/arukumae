@@ -10,7 +10,7 @@
  * 座標は端末の中で緯度経度にするだけで、外へは送らない。
  */
 import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon, Position } from "geojson";
-import type { Check } from "./checks";
+import { checkKindText, type Check } from "./checks";
 import { forestText, noticeText, type ForestInfo } from "./forest";
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./kp";
 import { noteText, notesText, type FieldNote } from "./notes";
@@ -218,11 +218,11 @@ function items(input: FieldMapInput): Item[] {
     const cy = ring.reduce((a, p) => a + p[1], 0) / ring.length;
     out.push({
       folder: "現地で確かめる所",
-      name: `${c.segmentId}${c.kind === "森林" ? "（森林）" : "（確信 低）"}${input.notes?.get(c.segmentId)?.result ? ` ${input.notes.get(c.segmentId)!.result}` : ""}`,
+      name: `${c.segmentId}（${c.kind === "低" ? "確信 低" : c.kind}）${input.notes?.get(c.segmentId)?.result ? ` ${input.notes.get(c.segmentId)!.result}` : ""}`,
       style: input.notes?.get(c.segmentId)?.result ? "check-done" : "check",
       description: table([
         ["区切り", c.segmentId],
-        ["種類", c.kind === "森林" ? "森林の区域と判定が食い違う" : "Claude の確信が低い"],
+        ["種類", checkKindText(c.kind)],
         ["理由", c.why],
         ["木（判定）", `${c.tree}%`],
         ["現地の記録", noteText(input.notes?.get(c.segmentId))],

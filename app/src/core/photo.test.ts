@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "./geom";
-import { windowsOf } from "./photo";
+import { LATEST, PHOTO_YEARS, photoLayerLabel, photoTileTemplate, photoTileUrl, windowsOf } from "./photo";
 
 function fakeSegments(pairs: number): Segment[] {
   const out: Segment[] = [];
@@ -27,6 +27,15 @@ describe("windowsOf", () => {
     expect(w).toHaveLength(3);
     expect(w[1].map((s) => s.id)).toEqual(["L010", "L011", "L012", "L013", "L014", "L015", "L016", "L017", "L018", "L019"]);
     expect(w[2].length).toBe(20);
+  });
+
+  it("写真の層：最新は全国最新写真、4 桁の年は年度別写真。年の候補は去年から 2007 年まで", () => {
+    expect(photoTileUrl(LATEST, 18, 1, 2)).toBe("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/18/1/2.jpg");
+    expect(photoTileUrl("2022", 18, 1, 2)).toBe("https://cyberjapandata.gsi.go.jp/xyz/nendophoto2022/18/1/2.png");
+    expect(photoTileTemplate("2022")).toBe("https://cyberjapandata.gsi.go.jp/xyz/nendophoto2022/{z}/{x}/{y}.png");
+    expect(PHOTO_YEARS[0]).toBe(String(new Date().getFullYear() - 1));
+    expect(PHOTO_YEARS.at(-1)).toBe("2007");
+    expect(photoLayerLabel("2022")).toBe("2022 年度の写真");
   });
 
   it("20 対までなら 1 窓", () => {

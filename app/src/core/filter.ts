@@ -10,7 +10,7 @@ import type { FieldNote } from "./notes";
 import type { Judgment, ParcelHit, ParcelProps } from "./types";
 
 export type HitFilter = "all" | "tree" | "check" | "forest" | "unjudged" | "ng";
-export type CheckFilter = "all" | "low" | "forest" | "todo" | "ng" | "done";
+export type CheckFilter = "all" | "low" | "forest" | "change" | "todo" | "ng" | "done";
 
 /** 木ありと見る割合（最大がこれ以上）。判定の刻みは 0・25・50・75・100 なので、半分以上 */
 export const TREE_MIN = 50;
@@ -28,6 +28,7 @@ export const CHECK_FILTERS: { id: CheckFilter; label: string; tip: string }[] = 
   { id: "all", label: "全部", tip: "確かめる所を全部" },
   { id: "low", label: "確信 低", tip: "Claude の確信が低かった区切り" },
   { id: "forest", label: "森林", tip: "森林の区域と判定が食い違う区切り" },
+  { id: "change", label: "変化", tip: "別の年の写真と比べて変化があった区切り（もう切られている、造成された、など）" },
   { id: "todo", label: "まだ", tip: "現地の記録がまだない所" },
   { id: "ng", label: "×", tip: "現地の記録が ×（違う）の所" },
   { id: "done", label: "済", tip: "現地の記録（○△×）がある所" },
@@ -81,6 +82,8 @@ export function filterChecks(checks: Check[], f: CheckFilter, notes: Map<string,
         return c.kind === "低";
       case "forest":
         return c.kind === "森林";
+      case "change":
+        return c.kind === "変化";
       case "todo":
         return !n?.result;
       case "ng":
