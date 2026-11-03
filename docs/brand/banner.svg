@@ -40,11 +40,13 @@
   </g>
   <!-- 左：名前と一文 -->
   <g font-family="'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', sans-serif">
-    <g transform="translate(80 92)">
-      <rect width="64" height="64" rx="14" fill="#1d232a"/>
-      <path d="M13 57 C 13 40 30 44 33 31 S 44 18 50 14" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
-      <circle cx="50" cy="14" r="8.5" fill="#b7262a" stroke="#1d232a" stroke-width="3.5"/>
-    </g>
+    <svg x="80" y="92" width="64" height="64" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="14" fill="#1d232a"/>
+    <path d="M6 34 L36 24 L48 50 L18 60 Z" fill="#ffd600"/>
+    <path d="M12 63 C 18 48 28 40 38 33 S 54 18 60 4" fill="none" stroke="#1d232a" stroke-width="12" stroke-linecap="round"/>
+    <path d="M12 63 C 18 48 28 40 38 33 S 54 18 60 4" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="38" cy="33" r="7.5" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+  </svg>
     <text x="160" y="140" font-size="40" font-weight="600" fill="#1d232a" letter-spacing="2">アルクマエ</text>
     <text x="82" y="250" font-size="54" font-weight="600" fill="#1d232a" letter-spacing="1">現地を歩く前に、</text>
     <text x="82" y="322" font-size="54" font-weight="600" fill="#1d232a" letter-spacing="1">かかる筆と木を洗い出す。</text>

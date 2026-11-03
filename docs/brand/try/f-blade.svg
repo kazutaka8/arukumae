@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 案 F「ブレードと道」：曲がる道の上を、長いブレード（白の細長い形）が斜めに横切る。先が道の外へ出て、そこに赤い印。「長い荷物が曲がりで外へ振れる」を一目で -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M8 60 C 8 42 20 34 30 30 S 50 22 58 14" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="9" stroke-linecap="round"/>
+  <path d="M10 44 C 20 36 44 30 56 10 C 46 24 24 42 12 48 Z" fill="#ffffff"/>
+  <circle cx="54" cy="12" r="6.5" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+</svg>

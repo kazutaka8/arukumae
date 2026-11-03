@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 案 E「かかる筆」：傾いた黄色の筆（土地）を、道が横切る。道が筆にかかる角に赤い印。黄色は地図の「かかる部分」の色で、16px でも強い -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M8 38 L34 28 L44 52 L18 60 Z" fill="#ffd600"/>
+  <path d="M8 38 L34 28 L44 52 L18 60 Z" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5"/>
+  <path d="M14 62 C 20 46 30 40 40 32 S 54 16 58 6" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="39" cy="33" r="7" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+</svg>

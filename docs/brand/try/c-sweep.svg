@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 案 C「振り出し」：曲がる道（白）の外側に、ブレードが掃く範囲（薄い白の帯）が膨らむ。帯がかかる所に赤い印。この道具が測るものそのもの -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M12 60 C 12 36 24 28 40 24 S 60 18 62 8" fill="none" stroke="#ffffff" stroke-opacity="0.28" stroke-width="26" stroke-linecap="butt"/>
+  <path d="M12 60 C 12 36 24 28 40 24 S 60 18 62 8" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="47" cy="40" r="7" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+</svg>

@@ -1,10 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120" width="560" height="120" role="img" aria-label="アルクマエ 輸送路の用地下調べ">
   <!-- 横ロゴ：印＋名前＋説明の一行。字はシステムの Hiragino Sans / Noto Sans JP（配る版では字をパスにする） -->
-  <g transform="translate(12 12)">
-    <rect width="96" height="96" rx="21" fill="#ffffff"/>
-    <path d="M19.5 85.5 C 19.5 60 45 66 49.5 46.5 S 66 27 75 21" fill="none" stroke="#1d232a" stroke-width="15" stroke-linecap="round"/>
-    <circle cx="75" cy="21" r="12.75" fill="#b7262a" stroke="#ffffff" stroke-width="5.25"/>
-  </g>
+  <svg x="12" y="12" width="96" height="96" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="14" fill="#ffffff"/>
+    <path d="M6 34 L36 24 L48 50 L18 60 Z" fill="#ffd600"/>
+    <path d="M12 63 C 18 48 28 40 38 33 S 54 18 60 4" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round"/>
+    <path d="M12 63 C 18 48 28 40 38 33 S 54 18 60 4" fill="none" stroke="#1d232a" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="38" cy="33" r="7.5" fill="#b7262a" stroke="#ffffff" stroke-width="3"/>
+  </svg>
   <g font-family="'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic UI', sans-serif">
     <text x="132" y="64" font-size="44" font-weight="600" fill="#ffffff" letter-spacing="2">アルクマエ</text>
     <text x="134" y="94" font-size="15" fill="#b4bcc6" letter-spacing="1.5">輸送路の用地下調べ ── 公図と航空写真に軌跡図を重ねる</text>

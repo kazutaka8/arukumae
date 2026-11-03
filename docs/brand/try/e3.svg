@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- E の別の組み：筆を右上に、道は左下から右上へ。印は道が筆に入る所 -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M30 12 L58 20 L52 46 L24 38 Z" fill="#ffd600"/>
+  <path d="M8 58 C 14 44 22 38 32 32 S 48 20 56 8" fill="none" stroke="#1d232a" stroke-width="12" stroke-linecap="round"/>
+  <path d="M8 58 C 14 44 22 38 32 32 S 48 20 56 8" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="33" cy="31" r="7.5" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+</svg>

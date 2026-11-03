@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 案 G「ア」：カタカナの「ア」を道の線で描く。横棒＝起点からの道、縦の払い＝曲がって下りる道。払いの先に赤い印 -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M14 20 H 50 C 50 28 44 30 38 32" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M38 32 C 38 42 30 50 20 56" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="18" cy="57" r="6.5" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+</svg>

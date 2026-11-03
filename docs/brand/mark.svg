@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="アルクマエの印">
-  <!-- 印（案 A「道と印」）：濃い地に、曲がる道（白）と、その先に置いた赤い印。
-       「現地を歩く前に、確かめる所に印を付ける」。赤は Koniplus のロゴの「少し離れて加わる 1 つ」と同じ色。
-       16px でも読めるよう、要素は道と印の 2 つだけ。道は太く、箱の対角いっぱいに -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- E を詰めた：筆を大きく、道を太く。道が筆を横切り、かかる角に赤い印 -->
   <rect width="64" height="64" rx="14" fill="#1d232a"/>
-  <path d="M13 57 C 13 40 30 44 33 31 S 44 18 50 14" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="50" cy="14" r="8.5" fill="#b7262a" stroke="#1d232a" stroke-width="3.5"/>
+  <path d="M6 34 L36 24 L48 50 L18 60 Z" fill="#ffd600"/>
+  <path d="M12 63 C 18 48 28 40 38 33 S 54 18 60 4" fill="none" stroke="#1d232a" stroke-width="12" stroke-linecap="round"/>
+  <path d="M12 63 C 18 48 28 40 38 33 S 54 18 60 4" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="38" cy="33" r="7.5" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
 </svg>

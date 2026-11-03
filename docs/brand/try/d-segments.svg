@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 案 D「区切り」：道の外側に並ぶ 10m の区切り。色は木の判定（白 → 黄 → 橙 → 赤）。赤い印は確かめる所。道具の地図の見え方を記号にした -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M10 58 C 10 40 22 36 32 30 S 50 18 58 8" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+  <g transform="rotate(-38 32 32)">
+    <rect x="16" y="36" width="9" height="12" rx="1.5" fill="#ffffff" fill-opacity="0.9"/>
+    <rect x="27" y="36" width="9" height="12" rx="1.5" fill="#ffd600"/>
+    <rect x="38" y="36" width="9" height="12" rx="1.5" fill="#ff9800"/>
+    <rect x="49" y="36" width="9" height="12" rx="1.5" fill="#e53935"/>
+  </g>
+</svg>
