@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="アルクマエ：回頭（赤い軸）">
+  <!-- Codex の 1「回頭」を詰めた：扇の要（回る軸）に赤い印。Koniplus の「離れて加わる 1 つ」を受ける。扇と棒は少し内側に寄せて余白を取る -->
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M14 52 V12 A40 40 0 0 1 54 52 Z" fill="#ffd600"/>
+  <path d="M10 48 L40 18 L47 25 L17 55 Z" fill="#ffffff" stroke="#1d232a" stroke-width="4" stroke-linejoin="round"/>
+  <circle cx="14" cy="52" r="6.5" fill="#b7262a" stroke="#1d232a" stroke-width="3"/>
+</svg>

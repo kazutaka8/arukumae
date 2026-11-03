@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="64" height="64" viewBox="0 0 64 64"
+     role="img" aria-label="アルクマエ：人の一片">
+  <rect width="64" height="64" rx="14" fill="#ffffff"/>
+  <path d="M12 14 H30 V22 H38 V38 H50 V52 H12 Z"
+        fill="#1d232a"/>
+  <path d="M34 10 H54 V34 H42 V18 H34 Z"
+        fill="#b7262a"/>
+</svg>

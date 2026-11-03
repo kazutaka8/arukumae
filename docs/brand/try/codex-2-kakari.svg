@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="64" height="64" viewBox="0 0 64 64"
+     role="img" aria-label="アルクマエ：かかり">
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M8 12 H32 L40 28 L28 40 H8 Z"
+        fill="#ffffff"/>
+  <path d="M28 28 H56 V52 H28 Z"
+        fill="#ffffff"/>
+  <path d="M28 28 H40 L28 40 Z"
+        fill="#ffd600"/>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="64" height="64" viewBox="0 0 64 64"
+     role="img" aria-label="アルクマエ：土地から一行へ">
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M10 16 L30 10 V26 L22 34 V50 L10 54 Z"
+        fill="#ffffff"/>
+  <path d="M38 12 H54 V20 H38 Z
+           M34 28 H54 V36 H34 Z
+           M26 44 H54 V52 H26 Z"
+        fill="#ffd600"/>
+</svg>

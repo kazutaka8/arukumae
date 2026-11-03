@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="64" height="64" viewBox="0 0 64 64"
+     role="img" aria-label="アルクマエ：回頭">
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M12 52 V8 A44 44 0 0 1 56 52 Z"
+        fill="#ffd600"/>
+  <path d="M8 48 L39 17 L47 25 L16 56 Z"
+        fill="#ffffff"
+        stroke="#1d232a"
+        stroke-width="4"
+        stroke-linejoin="round"/>
+</svg>

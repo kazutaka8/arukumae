@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="64" height="64" viewBox="0 0 64 64"
+     role="img" aria-label="アルクマエ：筆の一歩">
+  <rect width="64" height="64" rx="14" fill="#1d232a"/>
+  <path d="M40 8 L50 14 L52 24 L48 28 L30 20 L32 14 Z"
+        fill="#ffffff"/>
+  <path d="M28 24 L46 32 L40 40 L30 36 L24 30 Z"
+        fill="#ffd600"/>
+  <path d="M14 44 L24 40 L30 50 L20 56 Z"
+        fill="#ffffff"/>
+</svg>
