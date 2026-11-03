@@ -102,6 +102,8 @@ function schema(ids: string[], two = false) {
 
 export interface JudgeResult {
   judgments: Judgment[];
+  /** 頼んだのに答えに無かった番号。再送はせず（費用がかかる）、未判定のまま「確かめる所」に入れる（spec §8.4） */
+  missing: string[];
   model: string;
   seconds: number;
   inputTokens: number;
@@ -157,25 +159,62 @@ export async function judgeWindow(client: Anthropic, model: ModelId, images: Win
   const [pin, pout] = PRICE[model];
   const usd = (msg.usage.input_tokens * pin + msg.usage.output_tokens * pout) / 1e6;
   const refused = msg.stop_reason === "refusal";
-  let judgments: Judgment[] = [];
-  if (!refused) {
-    const text = msg.content.find((b) => b.type === "text")?.text ?? "{}";
-    const parsed = JSON.parse(text) as { segments: { id: string; tree: number; treeOld?: number; change?: PhotoChange; kind: TreeKind; other: string[]; conf: Confidence; why: string }[] };
-    judgments = parsed.segments
-      .filter((s) => ids.includes(s.id))
-      .map((s) => ({
-        segmentId: s.id,
-        tree: s.tree,
-        kind: s.kind,
-        other: s.other,
-        conf: s.conf,
-        why: s.why,
-        by: "Claude" as const,
-        model,
-        ...(second ? { oldYear: second.layer, treeOld: s.treeOld, change: s.change } : {}),
-      }));
+  const { judgments, missing } = refused ? { judgments: [], missing: ids } : parseAnswer(msg.content.find((b) => b.type === "text")?.text ?? "{}", ids, model, second?.layer);
+  return { judgments, missing, model, seconds, inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, usd, refused };
+}
+
+interface RawSegment {
+  id: string;
+  tree: number;
+  treeOld?: number;
+  change?: PhotoChange;
+  kind: TreeKind;
+  other: string[];
+  conf: Confidence;
+  why: string;
+}
+
+/**
+ * 答えの JSON を判定にする。形は json_schema で固めてあるが、番号の過不足はスキーマでは縛れないので、ここで見る：
+ * - 頼んでいない番号は捨てる。同じ番号が 2 回あれば最初のものを使う
+ * - 頼んだのに無い番号は missing に返す（spec §8.4。再送はしない）
+ * - 選択肢にない値（スキーマをすり抜けたとき）は、その区切りを無かったことにして missing に入れる（壊れた値を保存しない）
+ */
+export function parseAnswer(text: string, ids: string[], model: string, oldYear?: string): { judgments: Judgment[]; missing: string[] } {
+  let parsed: { segments?: unknown };
+  try {
+    parsed = JSON.parse(text) as { segments?: unknown };
+  } catch {
+    return { judgments: [], missing: [...ids] };
   }
-  return { judgments, model, seconds, inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, usd, refused };
+  const want = new Set(ids);
+  const seen = new Set<string>();
+  const judgments: Judgment[] = [];
+  for (const raw of Array.isArray(parsed.segments) ? (parsed.segments as RawSegment[]) : []) {
+    if (!raw || typeof raw !== "object" || !want.has(raw.id) || seen.has(raw.id)) continue;
+    const ok =
+      [0, 25, 50, 75, 100].includes(raw.tree) &&
+      KINDS.includes(raw.kind) &&
+      ["高", "中", "低"].includes(raw.conf) &&
+      Array.isArray(raw.other) &&
+      raw.other.every((o) => OTHERS.includes(o)) &&
+      typeof raw.why === "string" &&
+      (!oldYear || ([0, 25, 50, 75, 100].includes(raw.treeOld as number) && (PHOTO_CHANGES as readonly string[]).includes(raw.change as string)));
+    if (!ok) continue;
+    seen.add(raw.id);
+    judgments.push({
+      segmentId: raw.id,
+      tree: raw.tree,
+      kind: raw.kind,
+      other: raw.other,
+      conf: raw.conf,
+      why: raw.why,
+      by: "Claude",
+      model,
+      ...(oldYear ? { oldYear, treeOld: raw.treeOld, change: raw.change } : {}),
+    });
+  }
+  return { judgments, missing: ids.filter((id) => !seen.has(id)) };
 }
 
 /** 押す前に出す費用の目安（$）。spec §6.1「費用がかかる操作は、押す前に目安を出す」 */

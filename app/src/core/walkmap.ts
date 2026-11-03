@@ -16,7 +16,7 @@ import { fetchTile, lonLatToPx, metersPerPx, TILE, windowsOf, Z } from "./photo"
 import { toLonLat, type EN } from "./proj";
 import type { KpMark } from "./kp";
 import { estimateKp, fmtKm } from "./kp";
-import { listChecks, type Check } from "./checks";
+import { listChecks, treeText, type Check } from "./checks";
 import type { ForestInfo } from "./forest";
 import { type FieldNote } from "./notes";
 import type { Judgment, ParcelHit } from "./types";
@@ -46,6 +46,10 @@ export interface WalkMapInput {
   forestFlags: Map<string, string> | null;
   /** 現地の記録。あれば表の○×とメモの欄に印字する（もう見た所が分かるように） */
   notes?: Map<string, FieldNote>;
+  /** Claude の答えに番号がなかった区切り（未判定のまま「確かめる所」に出す） */
+  unjudged?: ReadonlySet<string>;
+  /** 公図の出典（「登記所備付地図データ ○○市（法務省）」）。案件の公図から作る。省けば市町村なし */
+  mojAttribution?: string;
 }
 
 // A4 縦（mm）。描く解像度は 8 px/mm（約 203 dpi）。地理院の写真（z18、約 0.48m／画素）を拡大して貼るので、これ以上細かくしても写真はよくならない
@@ -60,7 +64,7 @@ const CHECK_ROW_H = 7.5;
 
 const TREE_FILL: Record<number, string> = { 0: "rgba(255,255,255,0.25)", 25: "rgba(255,235,59,0.5)", 50: "rgba(255,152,0,0.55)", 75: "rgba(244,81,30,0.6)", 100: "rgba(183,28,28,0.65)" };
 
-const ATTRIBUTION = "出典：国土地理院（地理院タイル 全国最新写真）を加工 ／ 登記所備付地図データ 上水内郡小川村（法務省）を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors";
+const attributionOf = (input: WalkMapInput) => `出典：国土地理院（地理院タイル 全国最新写真）を加工 ／ ${input.mojAttribution ?? "登記所備付地図データ（法務省）"}を加工して作成 ／ 森林計画対象森林レイヤ（林野庁） ／ © OpenStreetMap contributors`;
 
 type XY = [number, number];
 
@@ -155,12 +159,12 @@ function header(ctx: CanvasRenderingContext2D, input: WalkMapInput, sub: string,
   ctx.stroke();
 }
 
-function footer(ctx: CanvasRenderingContext2D) {
+function footer(ctx: CanvasRenderingContext2D, input: WalkMapInput) {
   ctx.fillStyle = "#6b7a89";
   font(ctx, 2.3);
   ctx.textAlign = "left";
   ctx.textBaseline = "bottom";
-  ctx.fillText(ATTRIBUTION, mm(MARGIN), mm(PAGE_H - MARGIN + 2));
+  ctx.fillText(attributionOf(input), mm(MARGIN), mm(PAGE_H - MARGIN + 2));
   ctx.fillText("公図は「おおよその位置と隣接関係」を示す図面で、境界は現地と違うことがあります。届出などの要否は所管に確かめてください。", mm(MARGIN), mm(PAGE_H - MARGIN + 5.5));
 }
 
@@ -484,7 +488,7 @@ export async function renderIndexPage(input: WalkMapInput, pages: Segment[][], d
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   lines.forEach((l, i) => ctx.fillText(fitText(ctx, l, mm(PAGE_W - MARGIN * 2)), mm(MARGIN), mm(box.y + box.h + LEGEND_H + 4 + i * 6)));
-  footer(ctx);
+  footer(ctx, input);
   return canvas;
 }
 
@@ -503,17 +507,29 @@ interface CheckRow {
   id: string;
   fromM: number;
   toM: number;
-  tree: number;
+  tree: number | null;
   why: string;
-  kind: Check["kind"];
+  kind: Check["kind"] | "記録";
 }
 
-function checkRows(input: WalkMapInput, segs: Segment[]): CheckRow[] {
+/**
+ * 表に出す区切り：「確かめる所」に加えて、現地の記録（○△×・メモ）のある区切り（記録を持ち出す約束を守る。spec §9.4、Codex の指摘 2026-11-03）。
+ * 同じ区切りに確かめる理由が 2 つあれば 2 行、記録だけの区切りは「記録」の 1 行
+ */
+export function checkRows(input: WalkMapInput, segs: Segment[]): CheckRow[] {
   const byId = new Map(segs.map((s) => [s.id, s]));
-  return listChecks(segs, input.judgments, input.forestFlags).map((c) => {
+  const rows: CheckRow[] = listChecks(segs, input.judgments, input.forestFlags, input.unjudged ?? null).map((c) => {
     const s = byId.get(c.segmentId)!;
     return { id: s.id, fromM: s.fromM, toM: s.toM, tree: c.tree, why: c.why, kind: c.kind };
   });
+  const listed = new Set(rows.map((r) => r.id));
+  for (const s of segs) {
+    const n = input.notes?.get(s.id);
+    if (listed.has(s.id) || !n || (!n.result && !n.memo)) continue;
+    const j = input.judgments.get(s.id);
+    rows.push({ id: s.id, fromM: s.fromM, toM: s.toM, tree: j?.tree ?? null, why: j ? `判定：${j.tree}%（${j.by}）` : "判定なし", kind: "記録" });
+  }
+  return rows.sort((a, b) => a.fromM - b.fromM || a.id.localeCompare(b.id));
 }
 
 export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i: number, day: string): Promise<HTMLCanvasElement> {
@@ -540,12 +556,12 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
   ctx.fillStyle = "#1f2933";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`現地で確かめる所（確信が低い区切り・森林の区域と食い違う区切り）：${rows.length ? `${rows.length} か所` : "この区間にはありません。気づいたことを下に"}`, mm(MARGIN), mm(ty));
+  ctx.fillText(`現地で確かめる所（確信が低い・森林の区域と食い違う・変化・未判定）と、記録のある区切り：${rows.length ? `${rows.length} か所` : "この区間にはありません。気づいたことを下に"}`, mm(MARGIN), mm(ty));
   const cols = [
     { label: "区切り", w: 18 },
     { label: "起点から", w: 20 },
     { label: "木", w: 10 },
-    { label: "理由（低＝Claude の確信が低い、森林＝区域と食い違う）", w: 74 },
+    { label: "理由（低＝確信が低い、森林＝区域と食い違う、記録＝現地の記録あり）", w: 74 },
     { label: "○ ×", w: 14 },
     { label: "メモ", w: PAGE_W - MARGIN * 2 - 136 },
   ];
@@ -573,11 +589,11 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
   drawRow(cols.map((c) => c.label), true);
   const filled = rows.map((r) => {
     const n = input.notes?.get(r.id);
-    return [r.id, `${r.fromM}〜${r.toM}m`, `${r.tree}%`, `${r.kind === "低" ? "" : `${r.kind}：`}${r.why}`, n?.result ? `${n.result} 済` : "○  ×", n?.memo ?? ""];
+    return [r.id, `${r.fromM}〜${r.toM}m`, treeText(r.tree), `${r.kind === "低" ? "" : `${r.kind}：`}${r.why}`, n?.result ? `${n.result} 済` : "○  ×", n?.memo ?? ""];
   });
   while (filled.length < 3) filled.push(["", "", "", "", "○  ×", ""]);
   for (const r of filled) drawRow(r, false);
-  footer(ctx);
+  footer(ctx, input);
   return canvas;
 }
 

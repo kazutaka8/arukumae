@@ -46,6 +46,20 @@ describe("findHits", () => {
     expect(hits.map((h) => h.parcelId)).toEqual(["e"]);
   });
 
+  it("区切り同士が重なる所（つづら折り）では、かかる面積を二重に数えない（合わせた形で測る）", () => {
+    // 同じ場所に 2 つの区切り（10m × 10m が丸ごと重なる）を作る。筆はその 10m 四方を含む
+    const ring: EN[] = [[0, 3], [10, 3], [10, 13], [0, 13], [0, 3]];
+    const twin = [
+      { id: "L000", side: "L" as const, fromM: 0, toM: 10, ring, areaM2: 100, outerMaxM: 13 },
+      { id: "L001", side: "L" as const, fromM: 10, toM: 20, ring: ring.map(([e, n]) => [e + 5, n] as EN), areaM2: 100, outerMaxM: 13 },
+    ];
+    const [h] = findHits([parcel("g", "ふつう", -10, 0, 30, 20)], twin);
+    // 区切りごとの面積の合計は 200 だが、合わせた形は 15m × 10m = 150
+    expect(h.segAreas).toEqual({ L000: 100, L001: 100 });
+    expect(h.areaM2).toBeCloseTo(150, 0);
+    expect(h.segmentIds).toEqual(["L000", "L001"]);
+  });
+
   it("かかる部分の面積は、重なる区切りの面積の合計を超えない", () => {
     const big = parcel("f", "ふつう", -50, -50, 150, 50); // 帯を全部含む大きな筆
     const [h] = findHits([big], segs);

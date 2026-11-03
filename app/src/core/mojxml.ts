@@ -6,12 +6,14 @@
  *   必要な要素（GM_Point・GM_Curve・GM_Surface・筆・座標系など）だけを切り出して読む。切り出した要素は小さいので正規表現で読む
  * - 点は GM_Point で定義して GM_Curve が id で参照する形と、GM_Curve の中に座標を直接書く形があり、同じファイルに混ざる
  * - 座標は X が北・Y が東（spec §8.2）。この道具の平面座標 EN は [東, 北] なので入れ替える
+ * - 地図の系は <座標系>（公共座標8系 など）から読む。案件の計算の系（proj.ts の currentZone）と違えば、筆の座標を案件の系に換算して比べる
+ *   （県境をまたぐ道では、隣の県の地図が別の系で来る。2026-11-03）
  * - 任意座標系の地図は緯度経度にできないので、読み飛ばして枚数だけ伝える（F4 の対象）
  * - ファイルの中身はこの端末の外へ出さない（計算は全部ここで終わる）
  */
 import { StationIndex } from "./geom";
 import type { ParcelFeature } from "./parcels";
-import { toLonLat, type EN } from "./proj";
+import { currentZone, toLonLatZone, toPlaneZone, zoneFromCrs, type EN } from "./proj";
 import type { ParcelKind } from "./types";
 
 export interface MojParcel {
@@ -34,6 +36,8 @@ export interface MojMap {
   crs: string;
   /** 公共座標系（平面直角座標系）なら true。任意座標系は false */
   isPublic: boolean;
+  /** 公共座標系の系の番号（1〜19）。任意座標系なら null */
+  zone: number | null;
   parcels: MojParcel[];
   /** 形のない筆（形状の参照先がない）の数。読み落としの手がかり */
   noShape: number;
@@ -112,7 +116,8 @@ export class MojxmlParser {
       parcels.push({ id: f.id, oaza: f.oaza, chiban: f.chiban, kind: kindOf(f.chiban), accuracy: f.accuracy, survey: f.survey, rings });
     }
     const crs = this.meta["座標系"] ?? "";
-    return { stem: this.stem, name: this.meta["地図名"] ?? "", city: this.meta["市区町村名"] ?? "", crs, isPublic: crs.startsWith("公共"), parcels, noShape, recognized: this.recognized };
+    const zone = zoneFromCrs(crs);
+    return { stem: this.stem, name: this.meta["地図名"] ?? "", city: this.meta["市区町村名"] ?? "", crs, isPublic: zone !== null, zone, parcels, noShape, recognized: this.recognized };
   }
 
   /** 図面の名前空間の接頭辞（ふつう zmn:）を根の要素から決める */
@@ -339,6 +344,50 @@ export function nearLine(ring: EN[], index: StationIndex, lineBbox: [number, num
   return false;
 }
 
+/**
+ * 中心線の点（samples。10m ごとで足りる）のどれかが筆の外周の中にあれば true。
+ * 外周が中心線から 200m より遠い大きな筆（山林の筆の中を道が通る）は、外周の距離だけで見ると落ちる（Codex の指摘 2026-11-03）。
+ * 穴は見ない（穴の中に道があっても、その穴の筆が別に拾われる。漏れより過剰）
+ */
+export function containsAny(ring: EN[], samples: EN[], lineBbox: [number, number, number, number]): boolean {
+  let minE = Infinity, minN = Infinity, maxE = -Infinity, maxN = -Infinity;
+  for (const [e, n] of ring) {
+    if (e < minE) minE = e;
+    if (e > maxE) maxE = e;
+    if (n < minN) minN = n;
+    if (n > maxN) maxN = n;
+  }
+  if (maxE < lineBbox[0] || minE > lineBbox[2] || maxN < lineBbox[1] || minN > lineBbox[3]) return false;
+  for (const p of samples) {
+    if (p[0] < minE || p[0] > maxE || p[1] < minN || p[1] > maxN) continue;
+    if (pointInRing(p, ring)) return true;
+  }
+  return false;
+}
+
+/** 点が輪の中にあるか（交差数の偶奇）。縁の上は「中」に倒す（漏れより過剰） */
+export function pointInRing([x, y]: EN, ring: EN[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > y !== yj > y) {
+      const xc = ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+      if (x < xc) inside = !inside;
+      else if (Math.abs(x - xc) < 1e-9) return true;
+    }
+  }
+  return inside;
+}
+
+/** 中心線の 1m ごとの点から、包含の確認に使う 10m ごとの点 */
+export function containSamples(dense: EN[], step = 10): EN[] {
+  const out: EN[] = [];
+  for (let i = 0; i < dense.length; i += step) out.push(dense[i]);
+  if ((dense.length - 1) % step !== 0) out.push(dense[dense.length - 1]);
+  return out;
+}
+
 export function lineBboxOf(dense: EN[]): [number, number, number, number] {
   let minE = Infinity, minN = Infinity, maxE = -Infinity, maxN = -Infinity;
   for (const [e, n] of dense) {
@@ -351,18 +400,23 @@ export function lineBboxOf(dense: EN[]): [number, number, number, number] {
 }
 
 /**
- * 1 枚の地図から、区間の周り（両側 bufferM）の筆だけを緯度経度の GeoJSON にする。
- * id は「ファイル名:筆の id」（前処理と同じ）。見本の判定や保存した値と同じ筆を同じ名前で指せるように
+ * 1 枚の地図から、区間の周り（両側 bufferM）の筆と、中心線を包む筆だけを緯度経度の GeoJSON にする。
+ * id は「ファイル名:筆の id」（前処理と同じ）。見本の判定や保存した値と同じ筆を同じ名前で指せるように。
+ * dense は案件の系（zone。省けば proj.ts の currentZone）の平面座標。地図の系が違えば、筆を案件の系に換算して比べる
  */
-export function cutParcels(map: MojMap, dense: EN[], bufferM = 200, index = new StationIndex(dense), bbox = lineBboxOf(dense)): ParcelFeature[] {
-  if (!map.isPublic) return [];
+export function cutParcels(map: MojMap, dense: EN[], bufferM = 200, index = new StationIndex(dense), bbox = lineBboxOf(dense), zone = currentZone()): ParcelFeature[] {
+  if (!map.isPublic || map.zone === null) return [];
+  const mapZone = map.zone;
+  const samples = containSamples(dense);
   const out: ParcelFeature[] = [];
   for (const p of map.parcels) {
-    if (!nearLine(p.rings[0], index, bbox, bufferM)) continue;
+    // 地図の系が案件の系と違うときだけ換算する（同じなら元の値のまま。前処理との一致を崩さないため）
+    const outer = mapZone === zone ? p.rings[0] : p.rings[0].map((en) => toPlaneZone(zone, toLonLatZone(mapZone, en)));
+    if (!nearLine(outer, index, bbox, bufferM) && !containsAny(outer, samples, bbox)) continue;
     out.push({
       type: "Feature",
       properties: { id: `${map.stem}:${p.id}`, map: map.stem, oaza: p.oaza, chiban: p.chiban, kind: p.kind, accuracy: p.accuracy, survey: p.survey } as ParcelFeature["properties"],
-      geometry: { type: "Polygon", coordinates: p.rings.map((r) => r.map((en) => toLonLat(en).map((v) => Math.round(v * 1e7) / 1e7))) },
+      geometry: { type: "Polygon", coordinates: p.rings.map((r) => r.map((en) => toLonLatZone(mapZone, en).map((v) => Math.round(v * 1e7) / 1e7))) },
     });
   }
   return out;

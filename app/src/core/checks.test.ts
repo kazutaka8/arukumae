@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkKindText, checkText, listChecks } from "./checks";
+import { checkKindText, checkText, listChecks, treeText } from "./checks";
 import { buildSegments, leftNormals, resample } from "./geom";
 import type { EN } from "./proj";
 import type { Judgment } from "./types";
@@ -24,5 +24,16 @@ describe("現地で確かめる所", () => {
     expect(out[2].why).toContain("2022 年度の写真と比べて「木が減った」（当時 100% → 今 0%）");
     expect(checkText(out)).toContain("L001（変化）：");
     expect(checkKindText("変化")).toContain("別の年の写真");
+  });
+
+  it("Claude の答えに番号がなかった区切りは、未判定のまま並ぶ（tree は null）。判定が付けば消える", () => {
+    const judgments = new Map<string, Judgment>([["L000", j("L000")]]);
+    const unjudged = new Set(["L000", "R001"]);
+    const out = listChecks(segs, judgments, null, unjudged);
+    expect(out.map((c) => `${c.segmentId}:${c.kind}:${c.tree}`)).toEqual(["R001:未判定:null"]);
+    expect(treeText(out[0].tree)).toBe("—");
+    expect(treeText(25)).toBe("25%");
+    expect(checkKindText("未判定")).toContain("判定なし");
+    expect(listChecks(segs, judgments, null, null)).toEqual([]);
   });
 });

@@ -7,7 +7,7 @@ import { StationIndex } from "./geom";
 import { cutParcels, lineBboxOf, type MojMap } from "./mojxml";
 import { createMojReader } from "./mojzip";
 import type { ParcelFeature } from "./parcels";
-import type { EN } from "./proj";
+import { setZone, type EN } from "./proj";
 
 export interface MapReport {
   stem: string;
@@ -22,7 +22,12 @@ export interface MapReport {
   noShape: number;
 }
 
-export type WorkerIn = { file: File; dense: EN[]; bufferM: number };
+/**
+ * 読む元：落とされたファイルか、取得先の URL（公図の自動取得。ワーカーの中で fetch して流し読みするので、全体をメモリに置かない）。
+ * zone は案件の計算の系（dense の系）。ワーカーは別の糸なので proj.ts の currentZone を共有できず、明示して渡す
+ */
+export type WorkerSource = { kind: "file"; file: File } | { kind: "url"; url: string; name: string; total: number };
+export type WorkerIn = { source: WorkerSource; dense: EN[]; bufferM: number; zone: number };
 export type WorkerOut =
   | { type: "progress"; bytes: number; total: number; maps: number; kept: number; current: string | null }
   | { type: "done"; features: ParcelFeature[]; maps: MapReport[]; skipped: string[]; ms: number }
@@ -31,9 +36,12 @@ export type WorkerOut =
 const post = (m: WorkerOut) => (globalThis as unknown as { postMessage(m: unknown): void }).postMessage(m);
 
 (globalThis as unknown as { onmessage: (e: MessageEvent<WorkerIn>) => void }).onmessage = async (e) => {
-  const { file, dense, bufferM } = e.data;
+  const { source, dense, bufferM, zone } = e.data;
   const t0 = performance.now();
   try {
+    setZone(zone);
+    const name = source.kind === "file" ? source.file.name : source.name;
+    const total = source.kind === "file" ? source.file.size : source.total;
     const index = new StationIndex(dense);
     const bbox = lineBboxOf(dense);
     const features: ParcelFeature[] = [];
@@ -46,9 +54,9 @@ const post = (m: WorkerOut) => (globalThis as unknown as { postMessage(m: unknow
       const now = performance.now();
       if (!force && now - lastPost < 150) return;
       lastPost = now;
-      post({ type: "progress", bytes, total: file.size, maps: maps.length, kept: features.length, current });
+      post({ type: "progress", bytes, total, maps: maps.length, kept: features.length, current });
     };
-    const reader = createMojReader(file.name, {
+    const reader = createMojReader(name, {
       onStart: (name) => {
         current = name;
         progress(true);
@@ -62,7 +70,14 @@ const post = (m: WorkerOut) => (globalThis as unknown as { postMessage(m: unknow
       },
       onSkip: (name) => skipped.push(name),
     });
-    const stream = file.stream().getReader();
+    let body: ReadableStream<Uint8Array>;
+    if (source.kind === "file") body = source.file.stream();
+    else {
+      const res = await fetch(source.url);
+      if (!res.ok || !res.body) throw new Error(`取得できませんでした（HTTP ${res.status}）`);
+      body = res.body;
+    }
+    const stream = body.getReader();
     for (;;) {
       const { value, done } = await stream.read();
       if (done) break;

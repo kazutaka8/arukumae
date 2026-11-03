@@ -303,3 +303,9 @@ table.list td.note-cell.ng { color: #c62828; }
 input.text { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; width: 100%; box-sizing: border-box; }
 .step-body p.err { color: #c62828; }
 .step-body .row.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+/* 手順 1：中心線を決める（F12）。3 つの出どころを畳める箱に */
+.step-body details.center { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; margin: 10px 0; }
+.step-body details.center > summary { cursor: pointer; }
+.step-body details.center h4 { margin: 12px 0 4px; font-size: 13px; }
+.save-state.err { color: #c62828; font-weight: 600; }

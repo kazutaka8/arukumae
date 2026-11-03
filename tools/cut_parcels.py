@@ -127,6 +127,44 @@ def near(ring, line, buffer):
     return any(dist_to_line(p, line) <= buffer for p in dense)
 
 
+def line_samples(line, step=10.0):
+    """線を step（m）ごとに打ち直した点。包含の確認用（道具の本体の containSamples と同じ刻み）。"""
+    out = [line[0]]
+    carry = 0.0
+    for a, b in zip(line[:-1], line[1:]):
+        L = float(np.hypot(*(b - a)))
+        d = step - carry
+        while d <= L:
+            out.append(a + (b - a) * d / L)
+            d += step
+        carry = L - (d - step)
+    out.append(line[-1])
+    return np.array(out)
+
+
+def contains_any(ring, samples):
+    """線の点のどれかが筆の外周の中にあれば True。外周が線から遠い大きな筆（山林の筆の中を道が通る）を落とさないため
+    （Codex の指摘 2026-11-03。道具の本体の containsAny と同じ）。縁の上は「中」に倒す。"""
+    r = np.array(ring)
+    inside_box = (samples[:, 0] >= r[:, 0].min()) & (samples[:, 0] <= r[:, 0].max()) & (samples[:, 1] >= r[:, 1].min()) & (samples[:, 1] <= r[:, 1].max())
+    for x, y in samples[inside_box]:
+        inside = False
+        j = len(r) - 1
+        for i in range(len(r)):
+            xi, yi = r[i]
+            xj, yj = r[j]
+            if (yi > y) != (yj > y):
+                xc = (xj - xi) * (y - yi) / (yj - yi) + xi
+                if x < xc:
+                    inside = not inside
+                elif abs(x - xc) < 1e-9:
+                    return True
+            j = i
+        if inside:
+            return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--xml-dir", type=Path, default=REPO / "data/raw/xml")
@@ -136,6 +174,7 @@ def main():
     args = ap.parse_args()
 
     line = line_xy(args.section)
+    samples = line_samples(line)
     feats = []
     for xml in sorted(args.xml_dir.glob("*.xml")):
         meta, polys = parse(xml)
@@ -144,7 +183,7 @@ def main():
             continue
         n = 0
         for f, ext, holes in polys:
-            if not near(ext, line, args.buffer):
+            if not near(ext, line, args.buffer) and not contains_any(ext, samples):
                 continue
             rings = [[list(to_latlon(x, y))[::-1] for x, y in r] for r in [ext] + holes]  # GeoJSON は [経度, 緯度]
             feats.append({

@@ -6,13 +6,14 @@
  * この端末に残す（localStorage）。読んだ軌跡図の座標もこの端末の中だけ
  */
 import { buildSegments, type Segment } from "./geom";
-import type { EN } from "./proj";
-import { sweepFromLines } from "./track";
+import { toLonLatZone, type EN, type LonLat } from "./proj";
+import { linesToPlane, sweepFromLines } from "./track";
 import { curveFlags, DEFAULT_BAND, flatSweep, outerFromSweep, PRESETS, sweepVehicle, type BandParams, type PresetId, type Sweep, type TiltZone, type Vehicle } from "./vehicle";
 
 export type TrackSource =
   | { kind: "vehicle"; preset: PresetId; vehicle: Vehicle; tiltZones: TiltZone[] }
-  | { kind: "file"; name: string; lines: EN[][] }
+  /** 読んだ軌跡図の線（緯度経度。案件の系が変わっても使えるように平面座標では持たない。2026-11-03） */
+  | { kind: "file"; name: string; lines: LonLat[][] }
   | { kind: "band"; halfWidth: number };
 
 export interface TrackSetting {
@@ -39,7 +40,7 @@ export function computeTrack(dense: EN[], normals: EN[], t: TrackSetting): Track
       sweep = sweepVehicle(dense, normals, t.source.vehicle, t.source.tiltZones);
       break;
     case "file":
-      sweep = sweepFromLines(dense, normals, t.source.lines);
+      sweep = sweepFromLines(dense, normals, linesToPlane(t.source.lines));
       break;
     case "band":
       // 仮の帯は「余裕幅＋伐採の幅」を含めた一定の幅にする。掃く範囲＝幅−（余裕＋伐採）と逆算すると直線とカーブで変わってしまうため
@@ -68,19 +69,14 @@ export function describeTrack(t: TrackSetting): string {
   }
 }
 
-/** 保存の形。Float64Array は JSON にできないので、線の座標（数の配列）だけを持つ */
-export function saveTrack(key: string, t: TrackSetting) {
-  localStorage.setItem(key, JSON.stringify(t));
-}
-
-export function loadTrack(key: string): TrackSetting | null {
+/** 古い保存（2026-11-03 までの localStorage の鍵。線は第VIII系の平面座標）を読む。案件の保存にまとめるときの 1 回だけ使う */
+export function legacyTrack(raw: unknown): TrackSetting | null {
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const t = JSON.parse(raw) as TrackSetting;
-    if (!t.source || !t.band) return null;
+    const t = raw as TrackSetting;
+    if (!t || !t.source || !t.band) return null;
     if (t.source.kind === "vehicle" && !(t.source.preset in PRESETS)) return null;
     if (t.source.kind === "vehicle" && !Array.isArray(t.source.tiltZones)) t.source.tiltZones = []; // 区間を入れる前に保存したもの
+    if (t.source.kind === "file") t.source.lines = (t.source.lines as unknown as EN[][]).map((l) => l.map((en) => toLonLatZone(8, en)));
     return t;
   } catch {
     return null;

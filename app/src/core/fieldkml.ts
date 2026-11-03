@@ -10,7 +10,7 @@
  * 座標は端末の中で緯度経度にするだけで、外へは送らない。
  */
 import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon, Position } from "geojson";
-import { checkKindText, type Check } from "./checks";
+import { checkKindText, treeText, type Check } from "./checks";
 import { forestText, noticeText, type ForestInfo } from "./forest";
 import { estimateKp, fmtKm, formatKp, type KpMark } from "./kp";
 import { noteText, notesText, type FieldNote } from "./notes";
@@ -225,7 +225,7 @@ function items(input: FieldMapInput): Item[] {
         ["区切り", c.segmentId],
         ["種類", checkKindText(c.kind)],
         ["理由", c.why],
-        ["木（判定）", `${c.tree}%`],
+        ["木（判定）", treeText(c.tree)],
         ["現地の記録", noteText(input.notes?.get(c.segmentId))],
       ]),
       geometry: { type: "Point", coordinates: [cx, cy] },

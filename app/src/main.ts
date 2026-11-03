@@ -1,6 +1,9 @@
 /**
- * アルクマエの入口。見本のデータを読み、地図とパネルを組む。
+ * アルクマエの入口。案件（見本か、この端末に残したもの）を読み、地図とパネルを組む。
  * 手順 1〜7 を全部触れる。状態（AppState）はここに 1 つ置き、計算は core/、地図は map/、骨組みは ui/ に分ける。
+ *
+ * 2026-11-03（F12）から、案件は見本の区間に固定ではない。中心線を軌跡図の KML から選ぶ・OpenStreetMap をたどる・手で描く、
+ * 公図を市町村から自動で取得する、ができる。案件は 1 つの保存単位（core/store.ts）で、端末に持つのは 1 つ。別の案件は案件ファイルで切り替える
  */
 import "./style.css";
 import type { FeatureCollection, Point, Polygon, Position } from "geojson";
@@ -12,29 +15,47 @@ import { estimateKp, fmtKm, formatKp, type KpMark } from "./core/kp";
 import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
 import { PHOTO_YEARS, photoLayerLabel, renderSegmentCrop, renderWindow, windowsOf, type PhotoLayer } from "./core/photo";
-import { toLonLat, toPlane, type EN } from "./core/proj";
-import { linesToPlane, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
-import { computeTrack, DEFAULT_TRACK, describeTrack, loadTrack, saveTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
+import { setZone, toLonLat, toPlane, zoneLabel, zoneOf, type EN, type LonLat } from "./core/proj";
+import { parseNamedBytes, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
+import { computeTrack, DEFAULT_TRACK, describeTrack, legacyTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
-import { listChecks, type Check } from "./core/checks";
+import { listChecks, treeText, type Check } from "./core/checks";
 import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
-import { buildProject, describeProject, parseProject, projectFileName, type ProjectFile } from "./core/project";
+import { buildProject, describeCenterline, describeProject, mojAttribution, parseProject, projectFileName, type Centerline, type CenterlineSource, type MojSource, type ProjectFile } from "./core/project";
+import { clearLegacy, loadLegacy, loadStored, saveStored } from "./core/store";
+import { bboxOf as bboxOfLonLat, dedupe, lengthM, lineChoices, midpoint, pickCenterline, reversed, roadNameFromLine, validateCenterline, type LineChoice } from "./core/centerline";
+import { findMunicipalities, fmtMb, samplePoints, searchDataset, type MojDataset, type Municipality } from "./core/mojfetch";
+import { buildGraph, fetchRoads, roadNameOf, routeBbox, shortestPath, snapToRoad } from "./core/osmroute";
 import { countNotes, NOTE_RESULTS, noteText, pruneNotes, type FieldNote, type NoteResult } from "./core/notes";
 import { isRealChange, kindLabel, NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
-import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
+import type { MapReport, WorkerIn, WorkerOut, WorkerSource } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
-import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setPhotoYear, setSourceData, type LayerGroup } from "./map/map";
+import { addDraft, addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, DEMO_MOJ, KIND_COLORS, setAttribution, setDraft, setGroupVisible, setPhotoYear, setSection, setSourceData, type LayerGroup } from "./map/map";
 import { buildLayout, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
+
+/** 見本（小川村 県道401号）。組み込みの案件。「見本に戻す」と、版 1 の案件ファイルの中心線に使う */
+interface Demo {
+  coords: LonLat[];
+  roadName: string;
+  parcels: ParcelFeature[];
+  judgments: Judgment[];
+}
 
 interface AppState {
   map: MlMap;
   step: number;
+  demo: Demo;
+  /** 案件名（人が付ける）。案件ファイルの名前と画面の上に出す */
+  name: string;
+  roadName: string;
+  centerline: Centerline;
+  /** 計算の系（平面直角座標系の番号）。中心線の場所から決める */
+  zone: number;
   /** 中心線を 1m ごとに打ち直した点。添字＝起点からの距離（m） */
   dense: EN[];
   normals: EN[];
-  roadName: string;
   /** 伐採範囲の決め方（手順 2）と、その計算の結果 */
   track: TrackSetting;
   trackResult: TrackResult;
@@ -47,7 +68,8 @@ interface AppState {
   hits: ParcelHit[];
   hitById: Map<string, ParcelHit>;
   judgments: Map<string, Judgment>;
-  demoJudgments: Judgment[];
+  /** Claude の答えに番号がなかった区切り。未判定のまま「確かめる所」に出す */
+  unjudged: Set<string>;
   selectedParcel: string | null;
   selectedSegment: string | null;
   /** 「確かめる所」の何番目を見ているか（-1 はまだ）。手順 5 の前へ・次へと一覧の行で動く */
@@ -58,6 +80,12 @@ interface AppState {
   placingKp: boolean;
   /** 「地図を押して起立の区間を指す」の最中。1 点目を押したら fromM が入る */
   placingTilt: { fromM: number | null } | null;
+  /** 中心線を地図に手で描いている最中（手順 1） */
+  drawing: { points: LonLat[] } | null;
+  /** OpenStreetMap の道路をたどる最中（手順 1）。起点・終点を押し、道を引いた結果 */
+  osmPick: { start: LonLat | null; end: LonLat | null; busy: boolean; error: string | null; result: { coords: LonLat[]; wayIds: number[]; roadName: string; lengthM: number } | null } | null;
+  /** 軌跡図のファイルから中心線を選んでいる最中（手順 1） */
+  lineChoices: { file: string; choices: LineChoice[]; picked: number } | null;
   /** 判定の進み具合。null なら動いていない */
   run: { done: number; total: number; usd: number; log: string[]; cancel: boolean } | null;
   /** PDF を描いている最中の進み具合 */
@@ -69,19 +97,19 @@ interface AppState {
   segForest: Map<string, SegmentForest> | null;
   forestFlags: Map<string, string> | null;
   forestNote: string;
-  /** 公図の出どころ（見本か、読み込んだファイルか）と、地図ごとの報告 */
+  /** 公図の出どころ（見本か、読み込んだ・取得したファイルか）と、地図ごとの報告 */
   parcelSource: ParcelSource;
-  /** 見本の筆。「見本に戻す」用 */
-  demoParcels: ParcelFeature[];
   /** 公図を読んでいる最中の進み具合。null なら動いていない */
-  parcelRun: { bytes: number; total: number; maps: number; kept: number; current: string | null } | null;
+  parcelRun: { bytes: number; total: number; maps: number; kept: number; current: string | null; label: string } | null;
   parcelError: string | null;
+  /** 公図の自動取得（手順 2）の進み具合 */
+  fetchRun: FetchRun | null;
   /** 現地の記録（持ち運びモード）。区切りごとの○△×とメモ。この端末に残す */
   notes: Map<string, FieldNote>;
-  /** 案件名（人が付ける）。案件ファイルの名前と画面の上に出す */
-  name: string;
   /** 案件ファイルの保存・読み込みの結果。手順 1 に出す */
   projectMsg: { text: string; error: boolean } | null;
+  /** この端末に残せなかったときの言葉（残せていれば null） */
+  saveError: string | null;
   /** 一覧の絞り込み。地図は絞らない（filter.ts） */
   filter: { hits: HitFilter; q: string; checks: CheckFilter };
   /** 地図に重ねる写真の年（地理院の年度別写真）。null なら全国最新写真だけ */
@@ -93,25 +121,26 @@ interface ParcelSource {
   fileName: string | null;
   maps: MapReport[];
   skipped: string[];
-  /** この端末に残せたか（大きすぎると残せない） */
-  persisted: boolean;
+  /** 自動で取得したときの出どころ（出典の表記と取り直しのため） */
+  sources: MojSource[];
 }
 
-/** 読み込んだ公図をこの端末に残す形 */
-interface SavedParcels {
-  fileName: string;
+/**
+ * 公図の自動取得（spec §17.3）の進み具合。
+ * cities：市町村を当てている → choose：データセットを見せて同意を待つ → download：順に取得して読んでいる
+ */
+interface FetchRun {
+  phase: "cities" | "choose" | "download";
+  items: { muni: Municipality; dataset: MojDataset | null; error: string | null; done: boolean; kept: number }[];
+  agreed: boolean;
+  error: string | null;
+  /** 取得して読んだ筆（複数の市町村を順に足す） */
+  features: ParcelFeature[];
   maps: MapReport[];
   skipped: string[];
-  features: ParcelFeature[];
+  sources: MojSource[];
 }
 
-// 見本の案件の判定を、この端末に残す鍵。利用者が自分の鍵で払って得た判定を、ページを開き直して失わせないため
-const JUDGMENTS_KEY = "arukumae.judgments.ogawa";
-const KPS_KEY = "arukumae.kps.ogawa";
-const TRACK_KEY = "arukumae.track.ogawa";
-const PARCELS_KEY = "arukumae.parcels.ogawa";
-const NOTES_KEY = "arukumae.notes.ogawa";
-const NAME_KEY = "arukumae.name.ogawa";
 const DEFAULT_NAME = "小川村 県道401号（見本）";
 /** 公図から残す幅：区間の両側（m）。前処理（tools/cut_parcels.py）と同じ */
 const PARCEL_BUFFER_M = 200;
@@ -121,50 +150,56 @@ async function main() {
   buildLayout(root);
 
   const [section, parcelsFc, demoJudgments] = await Promise.all([loadSection(), loadParcels(), loadDemoJudgments()]);
-  const line = section.features[0].geometry.coordinates.map((c) => toPlane([c[0], c[1]]) as EN);
-  const dense = resample(line, 1);
+  const demo: Demo = {
+    coords: section.features[0].geometry.coordinates.map((c) => [c[0], c[1]] as LonLat),
+    roadName: section.features[0].properties.road_name,
+    parcels: parcelsFc.features as ParcelFeature[],
+    judgments: demoJudgments,
+  };
+  const project = await loadInitialProject(demo);
+  setZone(project.zone);
+
+  const center = midpoint(project.centerline.coords);
+  const map = createMap(document.getElementById("map")!, center);
+  const dense = resample(project.centerline.coords.map((c) => toPlane(c)), 1);
   const normals = leftNormals(dense);
-  const track = loadTrack(TRACK_KEY) ?? DEFAULT_TRACK;
-  const trackResult = computeTrack(dense, normals, track);
-  const segments = trackResult.segments;
-  const demoParcels = parcelsFc.features as ParcelFeature[];
-  // 前に読み込んだ公図がこの端末に残っていれば、見本ではなくそれを使う
-  const savedParcels = loadJson<SavedParcels>(PARCELS_KEY);
-  const parcels = savedParcels?.features?.length ? savedParcels.features : demoParcels;
+  const trackResult = computeTrack(dense, normals, project.track);
+  const parcels = project.parcels ? project.parcels.features : project.centerline.source.kind === "demo" ? demo.parcels : [];
   const t0 = performance.now();
-  const hits = findHits(parcels, segments);
+  const hits = findHits(parcels, trackResult.segments);
   console.info(`かかる筆 ${hits.length} 筆（${Math.round(performance.now() - t0)}ms）`);
-
-  const saved = loadSavedJudgments();
-  const judgments = new Map((saved ?? demoJudgments).map((j) => [j.segmentId, j]));
-  const segmentsGeo = applyJudgments(segmentsToGeoJSON(segments), judgments);
-
-  const mid = section.features[0].geometry.coordinates[Math.floor(section.features[0].geometry.coordinates.length / 2)];
-  const map = createMap(document.getElementById("map")!, [mid[0], mid[1]]);
+  const judgments = new Map(project.judgments.map((j) => [j.segmentId, j]));
 
   const state: AppState = {
     map,
-    step: 3,
+    step: project.centerline.source.kind === "demo" ? 3 : 1,
+    demo,
+    name: project.name || DEFAULT_NAME,
+    roadName: project.roadName,
+    centerline: project.centerline,
+    zone: project.zone,
     dense,
     normals,
-    roadName: section.features[0].properties.road_name,
-    track,
+    track: project.track,
     trackResult,
     trackError: null,
-    segments,
-    segmentsGeo,
+    segments: trackResult.segments,
+    segmentsGeo: applyJudgments(segmentsToGeoJSON(trackResult.segments), judgments),
     parcels,
     parcelById: new Map(parcels.map((p) => [p.properties.id, p])),
     hits,
     hitById: new Map(hits.map((h) => [h.parcelId, h])),
     judgments,
-    demoJudgments,
+    unjudged: new Set(project.unjudged),
     selectedParcel: null,
     selectedSegment: null,
     lowCursor: -1,
-    kps: loadJson<KpMark[]>(KPS_KEY) ?? [],
+    kps: project.kps,
     placingKp: false,
     placingTilt: null,
+    drawing: null,
+    osmPick: null,
+    lineChoices: null,
     run: null,
     pdfRun: null,
     pdfError: null,
@@ -173,52 +208,265 @@ async function main() {
     segForest: null,
     forestFlags: null,
     forestNote: "森林の区域を読んでいます…",
-    parcelSource: savedParcels?.features?.length
-      ? { fromFile: true, fileName: savedParcels.fileName, maps: savedParcels.maps, skipped: savedParcels.skipped, persisted: true }
-      : { fromFile: false, fileName: null, maps: [], skipped: [], persisted: true },
-    demoParcels,
+    parcelSource: project.parcels
+      ? { fromFile: true, fileName: project.parcels.fileName, maps: project.parcels.maps, skipped: project.parcels.skipped, sources: project.parcels.sources ?? [] }
+      : { fromFile: false, fileName: null, maps: [], skipped: [], sources: [] },
     parcelRun: null,
     parcelError: null,
-    notes: new Map((loadJson<FieldNote[]>(NOTES_KEY) ?? []).map((n) => [n.segmentId, n])),
-    name: localStorage.getItem(NAME_KEY) || DEFAULT_NAME,
+    fetchRun: null,
+    notes: new Map(project.notes.map((n) => [n.segmentId, n])),
     projectMsg: null,
+    saveError: null,
     filter: { hits: "all", q: "", checks: "all" },
     photoYear: loadPhotoYear(),
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
-  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput, importParcels, fieldMapInput, selectSegment };
+  if (import.meta.env.DEV) (window as unknown as { __arukumae: unknown }).__arukumae = { map, state, t0: performance.now(), walkMapInput, fieldMapInput, selectSegment, applyCenterline, currentProject };
 
   map.on("load", () => {
-    addParcels(map, parcelsToGeoJSON(parcels), hitsToGeoJSON(hits));
-    addSegments(map, segmentsGeo);
+    addParcels(map, parcelsToGeoJSON(state.parcels), hitsToGeoJSON(state.hits));
+    addSegments(map, state.segmentsGeo);
     addTrack(map, trackGeo(state));
-    addSection(map, section);
+    addSection(map, state.centerline.coords);
     addKps(map, kpsGeo(state));
+    addDraft(map);
     for (const h of state.hits) map.setFeatureState({ source: "parcels", id: h.parcelId }, { hit: true });
     wireMapClicks(state);
     renderLegend(state);
     setPhotoYear(map, state.photoYear);
+    map.fitBounds(bboxOfLonLat(state.centerline.coords) as LngLatBoundsLike, { padding: 80, duration: 0 });
   });
 
   showName(state);
+  updateAttribution(state);
   loadForest(state);
   renderStep(state);
   renderList(state);
   renderChecks(state);
   wireSettings(state);
   wireFilters(state);
+  showSaveState(state);
+}
+
+/* ---------- 案件の読み書き（この端末。core/store.ts） ---------- */
+
+function demoProject(demo: Demo): ProjectFile {
+  return buildProject({
+    name: DEFAULT_NAME,
+    roadName: demo.roadName,
+    centerline: { coords: demo.coords, source: { kind: "demo" } },
+    zone: 8,
+    track: DEFAULT_TRACK,
+    parcels: null,
+    judgments: demo.judgments,
+    kps: [],
+    notes: [],
+    unjudged: [],
+  });
+}
+
+/**
+ * 起動のときの案件：この端末に残したもの → 2026-11-03 までの古い形（別々の鍵）→ 見本、の順。
+ * 残したものが壊れていれば見本に戻す（壊れた案件で画面が開かないよりよい。console に理由を残す）
+ */
+async function loadInitialProject(demo: Demo): Promise<ProjectFile> {
+  const demoLine = { coords: demo.coords, roadName: demo.roadName };
+  try {
+    const stored = await loadStored();
+    if (stored) return parseProject(JSON.stringify(stored), demoLine);
+  } catch (e) {
+    console.warn("この端末に残した案件を読めなかったので、見本に戻します", e);
+  }
+  const legacy = loadLegacy();
+  if (legacy) {
+    try {
+      const judgments = Array.isArray(legacy.judgments) ? (legacy.judgments as Judgment[]) : demo.judgments;
+      const saved = legacy.parcels as { fileName?: string; maps?: MapReport[]; skipped?: string[]; features?: ParcelFeature[] } | null;
+      const p = parseProject(
+        JSON.stringify({
+          ...demoProject(demo),
+          name: legacy.name || DEFAULT_NAME,
+          track: legacyTrack(legacy.track) ?? DEFAULT_TRACK,
+          parcels: saved?.features?.length ? { fileName: saved.fileName ?? "公図", maps: saved.maps ?? [], skipped: saved.skipped ?? [], features: saved.features } : null,
+          judgments,
+          kps: Array.isArray(legacy.kps) ? legacy.kps : [],
+          notes: Array.isArray(legacy.notes) ? legacy.notes : [],
+        }),
+        demoLine,
+      );
+      await saveStored(p);
+      clearLegacy();
+      console.info("古い形の保存を 1 つの案件にまとめました");
+      return p;
+    } catch (e) {
+      console.warn("古い形の保存を読めなかったので、見本に戻します", e);
+    }
+  }
+  return demoProject(demo);
+}
+
+/** いまの状態を案件（ファイルと保存の形）にする */
+function currentProject(state: AppState): ProjectFile {
+  const s = state.parcelSource;
+  return buildProject({
+    name: state.name,
+    roadName: state.roadName,
+    centerline: state.centerline,
+    zone: state.zone,
+    track: state.track,
+    parcels: s.fromFile ? { fileName: s.fileName ?? "", maps: s.maps, skipped: s.skipped, features: state.parcels, ...(s.sources.length ? { sources: s.sources } : {}) } : null,
+    judgments: [...state.judgments.values()],
+    kps: state.kps,
+    notes: pruneNotes(state.notes),
+    unjudged: [...state.unjudged],
+  });
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistChain: Promise<void> = Promise.resolve();
+
+/**
+ * この端末に残す。続けて何度も呼ばれるので少し待ってまとめ、書き込みは順に並べる。
+ * 失敗したら（容量など）その旨を画面の上に出す。前に残したものは消えない（丸ごと書き換えるので、失敗なら古いまま）
+ */
+function persist(state: AppState) {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const p = currentProject(state);
+    persistChain = persistChain.then(async () => {
+      try {
+        await saveStored(p);
+        state.saveError = null;
+      } catch (e) {
+        state.saveError = `この端末に残せませんでした（${(e as Error).message}）。案件ファイルに保存してください`;
+        console.warn(e);
+      }
+      showSaveState(state);
+    });
+  }, 250);
+}
+
+function showSaveState(state: AppState) {
+  const el = document.getElementById("save-state")!;
+  el.textContent = state.saveError ?? (state.centerline.source.kind === "demo" ? "見本のデータ。判定はこの端末に残ります" : "この端末に残しています");
+  el.classList.toggle("err", !!state.saveError);
+}
+
+/**
+ * 案件を丸ごと入れ替える（案件ファイルを読んだ・見本に戻した・中心線を決め直した）。
+ * 系・中心線・区切り・かかる筆・森林・判定・距離標・記録・地図を全部作り直す
+ */
+function loadProject(state: AppState, p: ProjectFile) {
+  setZone(p.zone);
+  state.zone = p.zone;
+  state.name = p.name || DEFAULT_NAME;
+  state.roadName = p.roadName;
+  state.centerline = p.centerline;
+  state.dense = resample(p.centerline.coords.map((c) => toPlane(c)), 1);
+  state.normals = leftNormals(state.dense);
+  state.track = p.track;
+  state.trackError = null;
+  state.judgments = new Map(p.judgments.map((j) => [j.segmentId, j]));
+  state.unjudged = new Set(p.unjudged);
+  state.kps = p.kps;
+  state.notes = new Map(p.notes.map((n) => [n.segmentId, n]));
+  state.lowCursor = -1;
+  state.drawing = null;
+  state.osmPick = null;
+  state.lineChoices = null;
+  state.placingKp = false;
+  state.placingTilt = null;
+  state.map.getCanvas().style.cursor = "";
+  state.parcelError = null;
+  state.fetchRun = null;
+  state.forestIndex = null;
+  state.forest = null;
+  state.segForest = null;
+  state.forestFlags = null;
+  state.forestNote = "森林の区域を読んでいます…";
+  showName(state);
+  setSection(state.map, p.centerline.coords);
+  setDraft(state.map, null, []);
+  const demo = p.centerline.source.kind === "demo";
+  if (p.parcels) {
+    state.parcelSource = { fromFile: true, fileName: p.parcels.fileName, maps: p.parcels.maps, skipped: p.parcels.skipped, sources: p.parcels.sources ?? [] };
+    applyParcels(state, p.parcels.features);
+  } else {
+    state.parcelSource = { fromFile: false, fileName: null, maps: [], skipped: [], sources: [] };
+    applyParcels(state, demo ? state.demo.parcels : []);
+  }
+  updateAttribution(state);
+  // applyParcels → rebuildTrack が区切り・かかる筆・一覧・手順を作り直す。距離標は別の源なのでここで
+  refreshKps(state);
+  loadForest(state);
+  showSaveState(state);
+  persist(state);
+  if (state.map.getSource("section")) state.map.fitBounds(bboxOfLonLat(p.centerline.coords) as LngLatBoundsLike, { padding: { top: 60, bottom: 60, left: leftCover() + 40, right: rightCover() + 40 }, duration: 600 });
+}
+
+/** 起立の区間は「起点から何 m」で持つので、中心線が変われば（反転でも）合わなくなる。消す */
+function stripZones(t: TrackSetting): TrackSetting {
+  return t.source.kind === "vehicle" && t.source.tiltZones.length ? { ...t, source: { ...t.source, tiltZones: [] } } : t;
+}
+
+/** 出典の表記（地図の右下）。公図の市町村はいまの案件から */
+function updateAttribution(state: AppState) {
+  const demo = !state.parcelSource.fromFile && state.centerline.source.kind === "demo";
+  const parcels = state.parcelSource.fromFile ? { fileName: "", maps: state.parcelSource.maps, skipped: [], features: [] } : null;
+  const text = mojAttribution(parcels, demo);
+  const url = demo ? DEMO_MOJ.url : (state.parcelSource.sources[0]?.datasetUrl ?? null);
+  setAttribution(state.map, { text, url });
+}
+
+/**
+ * 中心線を決め直す（spec §17.2）。区切り・かかる筆・判定・距離標・記録は作り直し。
+ * 公図は、向きを反転しただけなら残す。それ以外は見本なら見本の筆、ほかは空（取得し直す）。
+ * 判定や記録があれば、消える前に確かめる（案件ファイルに保存する手もある）
+ */
+function applyCenterline(state: AppState, coords: LonLat[], roadName: string, source: CenterlineSource, opt: { keepParcels?: boolean; track?: TrackSetting } = {}): boolean {
+  const clean = dedupe(coords);
+  const bad = validateCenterline(clean);
+  if (bad) {
+    alert(`この線は中心線にできません：${bad}`);
+    return false;
+  }
+  const zones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones.length : 0;
+  const lost = [state.judgments.size ? `判定 ${state.judgments.size}` : "", state.kps.length ? `距離標 ${state.kps.length}` : "", state.notes.size ? `現地の記録 ${state.notes.size}` : "", zones ? `起立の区間 ${zones}` : ""].filter(Boolean);
+  if (lost.length && !confirm(`中心線を変えると、${lost.join("・")}は消えます（起点からの距離と区切りの番号が変わるため）。続けますか？\n残したいなら、先に「案件を保存する（JSON）」で案件ファイルにしてください。`)) return false;
+  const demo = source.kind === "demo";
+  const zone = zoneOf(midpoint(clean));
+  const s = state.parcelSource;
+  const parcels = opt.keepParcels && s.fromFile ? { fileName: s.fileName ?? "", maps: s.maps, skipped: s.skipped, features: state.parcels, ...(s.sources.length ? { sources: s.sources } : {}) } : null;
+  const p = buildProject({
+    name: demo ? DEFAULT_NAME : state.name === DEFAULT_NAME ? roadName || "新しい案件" : state.name,
+    roadName,
+    centerline: { coords: clean, source },
+    zone,
+    track: stripZones(opt.track ?? (state.track.source.kind === "file" && !opt.keepParcels ? { ...state.track, source: { kind: "vehicle", preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] } } : state.track)),
+    parcels,
+    judgments: demo ? state.demo.judgments : [],
+    kps: [],
+    notes: [],
+    unjudged: [],
+  });
+  loadProject(state, p);
+  state.projectMsg = { text: `中心線を決めました：${describeCenterline(p.centerline)}（約 ${Math.round(lengthM(clean))}m、${zoneLabel(zone)}）`, error: false };
+  state.step = 1;
+  renderStep(state);
+  return true;
 }
 
 const HELP = {
   band: "伐採範囲：掃く範囲（軌跡図、または車両の寸法から計算した架空の軌跡図）に余裕幅を足し、そのさらに外へ伐採の幅を足したもの。道路の端（中心線から道路の半幅）より外の部分だけを区切りにします。手順 2 で決め方を変えられます。",
   segment: "区切り：伐採範囲を道に沿って 10m ごと、左右別に分けたもの。番号 L032 は「起点から 320〜330m の左」。この1つずつについて、木の有無を航空写真から判定します。",
   judged: "判定が付いている区切りの数。見本として最初から入っている Claude の判定、この道具から Claude に判定させたもの、人が直したものを合わせた数です。",
-  check: "確かめる所：(1) Claude の確信が「低」だった区切り（写真がぼやける・影で見えない・枠の位置が読みにくい、など）と、(2) 森林の区域（林野庁）と判定が食い違う区切り（区域の中なのに木が 25% 以下、区域の外なのに木が 75% 以上。区域の縁から 15m 以内は指摘しない）。現地で見る候補として一覧に並べています。",
+  check: "確かめる所：(1) Claude の確信が「低」だった区切り（写真がぼやける・影で見えない・枠の位置が読みにくい、など）と、(2) 森林の区域（林野庁）と判定が食い違う区切り（区域の中なのに木が 25% 以下、区域の外なのに木が 75% 以上。区域の縁から 15m 以内は指摘しない）、(3) 別の年の写真と比べて変化があった区切り、(4) Claude の答えに番号がなく未判定のままの区切り。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
   forest: "森林の区域：林野庁の「森林計画対象森林レイヤ」（地域森林計画の対象の民有林と国有林の区域、林班）。筆のかかる部分がこの区域にどれだけ入るかを測り、半分未満なら「一部」と書きます。伐採の届出が要るかどうかは、登記の地目ではなく、この民有林の区域かどうかで決まるとされています（自分の理解。森林法第10条の8）。道具は目印を付けるまでで、要否は所管の市町村に確かめてください。区域の線は 1/5,000 相当で、筆の境界とはふつうずれます。",
-  walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」の表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
+  walkmap: "持って歩く地図：A4 の PDF。1 ページ目が区間全体の索引図、2 ページ目からは起点から約 200m ずつ（木の判定の窓と同じ分け方）。航空写真の上に掃く範囲・伐採範囲・筆と地番・区切り（判定の色と番号）・起点からの距離と KP を重ね、下に「現地で確かめる所」と現地の記録のある区切りの表と、○×・メモを手で書く欄を付けます。文字も絵として入れているので、PDF の中の文字は検索できません。",
   tiltZone: "起立の区間：ブレードを立てられる所と角度を、場所ごとに決めます。電線をくぐる所や橋の下では立てられないので、全部の曲がりで立てるとは限りません。区間はブレードの根元がいる位置で見ます。区間の外は基本の角度（既定は 0°＝寝かせる。広めに出るので安全側）。",
   vehicle: "追従の計算：前軸が中心線をたどり、キングピンと台車の軸がそれを追います（引かれる点はいつも引く点の真後ろ）。曲がりでは台車が内側に切れ込み、ブレードは内側を弦のように横切り、先は外へ振れます。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。高さは見ません。",
   notes:
@@ -229,8 +477,14 @@ const HELP = {
     "現地マップ：この道具の結果を KML（Google Earth など）や GeoJSON（QGIS など）で持ち出すもの。かかる筆はかかる部分の形、区切りは判定の色（白 0% → 黄 25% → 橙 50% → 赤 75〜100%）、確かめる所は赤い印。押すと所在・地番・面積・KP・判定の理由が吹き出しで出ます。航空写真は入っていません（Google Earth の写真の上に重ねます）。座標は端末の中で作るだけで、外へは送りません。",
   mojxml:
     "地図XML：法務省が無料で公開している公図の電子データ（登記所備付地図データ）の形式。G空間情報センターから市町村ごとの zip で配られ、中に地図ごとの zip と XML が入っています。公共座標系の地図はそのまま重なります。任意座標系の地図（筆の半分以上がこれ）は図面の中だけの座標なので、位置を合わせないと重なりません。この道具はまだ位置合わせに対応していないので、読み飛ばして枚数だけ伝えます。",
+  mojfetch:
+    "公図の自動取得：中心線と、その両側 200m の点（100m ごと）がどの市町村にあるかを OpenStreetMap の行政境界で当て、G空間情報センターの検索（CKAN API）でその市町村の「登記所備付地図データ」のいちばん新しい年版を探します。zip の名前が市区町村コードで始まることを確かめてから（同名の町村を取り違えないため）、利用規約（法務省）への同意のあとで取得し、区間の両側 200m の筆だけを残します。取得先は G空間情報センター（法務省のデータ）で、ファイルはこの端末の外へ出しません。",
   project:
-    "案件ファイル：この端末に残しているもの（伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録・案件名）を 1 つの JSON にまとめたもの。事務所の PC で判定して保存し、iPad に送って読み込めば続きができます。現地で記録したら、また保存して PC に戻します。軌跡図の座標が入るので、利用者の手元に置くファイルです。道具が外へ送ることはありません。",
+    "案件ファイル：この端末に残しているもの（案件名・道路名・中心線・伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録）を 1 つの JSON にまとめたもの。事務所の PC で判定して保存し、iPad に送って読み込めば続きができます。現地で記録したら、また保存して PC に戻します。軌跡図の座標が入るので、利用者の手元に置くファイルです。道具が外へ送ることはありません。",
+  centerline:
+    "中心線：輸送路の区間の線。起点（0m）から終点へ、点の順が運ぶ向きです。区切りの番号・起点からの距離・架空の軌跡図はこの線から作ります。出どころは 3 つ：運送会社の軌跡図（KML）の中の線を選ぶ、OpenStreetMap の道路を地図でたどる、航空写真の上に手で描く。中心線を変えると、区切りの番号が変わるので判定・距離標・記録は作り直しです。",
+  osm:
+    "OpenStreetMap の道路をたどる：地図で起点と終点を押すと、周りの道路（highway）を Overpass API から取り、つながりをたどって最短の道を引きます。軌跡図が届く前に、車両の寸法から架空の軌跡図で下調べするための中心線です。道路名は OSM の name・ref から（参考）。OSM にない私道や新設の道は「手で描く」で。出典：© OpenStreetMap contributors（ODbL）。",
   kind: "種類：公図の地番の頭で分けたもの。「道」「水」は地番のない道路・水路、「無地番」は地番のない土地、「筆界未定地」は境界の決まっていない所、「一般」は地番のついたふつうの土地です。地目（宅地・田・山林など）は公図に入っていないので、ここでは分かりません。",
   photoYear:
     "写真の年：国土地理院の年度別写真（2007 年以降）を最新写真の上に重ねます。ある年と場所は限られ、無い所は下の最新写真が透けて見えます。小川村の見本の範囲は 2022 年度だけで、最新写真と同じ写真です（2026-11-02 に確かめた）。木を判定するときに「別の年の写真も一緒に見せる」のは、右上の「設定」で選びます。",
@@ -239,7 +493,7 @@ const HELP = {
   change:
     "変化：別の年の写真と比べて Claude が「木が減った」「造成や建物の変化」などと見た区切り。もう切られている、太陽光になっている、といった手がかりになります。現地で確かめる所に入ります。",
   filter: "絞り込み：一覧だけを絞ります。地図はそのままです（行を押せば地図が飛びます）。地番・所在の文字での検索は、種類と重ねられます。",
-  fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。",
+  fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。「全部を判定し直す」でも人が直した区切りは上書きしません。",
 };
 
 /* ---------- 手順 ---------- */
@@ -254,20 +508,14 @@ function renderStep(state: AppState) {
   const parts: string[] = [`<h3>${s.n}. ${s.title}</h3><p>${s.hint}</p>`];
   switch (state.step) {
     case 1:
-      parts.push(`<dl class="kv"><dt>案件名</dt><dd><input class="text" data-name value="${escapeHtml(state.name)}" maxlength="60" aria-label="案件名"></dd><dt>道路</dt><dd>${escapeHtml(state.roadName)}（見本の区間）</dd><dt>向き</dt><dd>南 → 北</dd><dt>区間</dt><dd>約 ${state.dense.length - 1} m</dd><dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`);
-      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">案件ファイル ${help(HELP.project)}</h4>`);
-      parts.push(`<div class="actions"><button class="btn" data-project-save>案件を保存する（JSON）</button></div>`);
-      parts.push(`<div class="dropzone" data-project-drop>ここに案件ファイル（.json）を落とすと、別の端末の続きができます<br><input type="file" accept=".json,application/json" data-project-file></div>`);
-      if (state.projectMsg) parts.push(`<p class="small ${state.projectMsg.error ? "err" : ""}">${escapeHtml(state.projectMsg.text)}</p>`);
-      parts.push(`<p class="muted small">中身は、この端末に残しているものと同じです（伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録）。読み込むと、この端末のものはファイルの中身に置き換わります。</p>`);
-      parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。公図は法務省の地図XML の zip をそのまま落とせます（見本では取り込み済み）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</div>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
+      parts.push(renderProjectStep(state));
       break;
     case 2:
       parts.push(renderTrackStep(state));
       break;
     case 3: {
       const kinds = countKinds(state);
+      if (!state.parcels.length) parts.push(`<p class="err">公図がまだありません。手順 2 で公図を取得するか、地図XML の zip を落としてください。</p>`);
       parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲 ${help(HELP.band)} にかかります（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。右の一覧の行を押すと、地図がそこへ飛びます。</p>`);
       parts.push(`<p>${forestSummary(state)} ${help(HELP.forest)}</p>`);
       parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。「地区外」「別図」は隣の地図を指す印なので数えていません。</div>`);
@@ -283,7 +531,8 @@ function renderStep(state: AppState) {
       const reviewed = [...state.judgments.values()].filter((j) => j.before);
       const forestN = lows.filter((c) => c.kind === "森林").length;
       const changeN = lows.filter((c) => c.kind === "変化").length;
-      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN - changeN}・森林の区域と食い違う ${forestN}${changeN ? `・別の年の写真と比べて変化 ${changeN} ${help(HELP.change)}` : ""}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
+      const noneN = lows.filter((c) => c.kind === "未判定").length;
+      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN - changeN - noneN}・森林の区域と食い違う ${forestN}${changeN ? `・別の年の写真と比べて変化 ${changeN} ${help(HELP.change)}` : ""}${noneN ? `・未判定 ${noneN}` : ""}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
       // 前へ・次へは、一覧で絞り込んだ中を回る。現地で「まだ見ていない所」だけを順に回れるように
       const vis = visibleChecks(state);
       const narrowed = vis.length !== lows.length ? `（絞り込み ${help(HELP.filter)}）` : "";
@@ -300,7 +549,7 @@ function renderStep(state: AppState) {
     }
     case 6: {
       const marks = [...state.kps].sort((a, b) => a.atM - b.atM);
-      parts.push(`<p>読んだ距離標 ${help(HELP.kp)} を地図に置くと、全部の区切りと筆に「${escapeHtml(state.roadName)} ○.○○km 付近（推定）」が付きます。2 本以上要ります。</p>`);
+      parts.push(`<p>読んだ距離標 ${help(HELP.kp)} を地図に置くと、全部の区切りと筆に「${escapeHtml(state.roadName || "道路名")} ○.○○km 付近（推定）」が付きます。2 本以上要ります。</p>`);
       parts.push(
         `<div class="actions"><button class="btn ${state.placingKp ? "" : "primary"}" data-place-kp>${state.placingKp ? "やめる（地図を押すと距離標が入ります）" : "地図を押して距離標を置く"}</button></div>`,
       );
@@ -371,22 +620,23 @@ function renderStep(state: AppState) {
       renderStep(state);
     }),
   );
+  const fileStem = () => (state.roadName || state.name).replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 30) || "案件";
   body.querySelector("[data-csv]")?.addEventListener("click", () => {
     const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes);
     const day = new Date().toISOString().slice(0, 10);
-    download(`arukumae_${state.roadName}_一覧表_${day}.csv`, toCsv(rows));
+    download(`arukumae_${fileStem()}_一覧表_${day}.csv`, toCsv(rows));
   });
   body.querySelector("[data-buy-csv]")?.addEventListener("click", () => {
     const rows = buildRows(state.hits, state.parcelById, state.judgments, state.kps, state.roadName, state.forest, state.forestFlags, state.segments, state.notes);
     const day = new Date().toISOString().slice(0, 10);
-    download(`arukumae_${state.roadName}_公図を買うリスト_${day}.csv`, toBuyCsv(buildBuyList(rows)));
+    download(`arukumae_${fileStem()}_公図を買うリスト_${day}.csv`, toBuyCsv(buildBuyList(rows)));
   });
   body.querySelectorAll<HTMLButtonElement>("[data-field]").forEach((b) =>
     b.addEventListener("click", () => {
       const day = new Date().toISOString().slice(0, 10);
       const input = fieldMapInput(state, day);
-      if (b.dataset.field === "kml") download(`arukumae_${state.roadName}_現地マップ_${day}.kml`, fieldKml(input), "application/vnd.google-earth.kml+xml");
-      else download(`arukumae_${state.roadName}_現地マップ_${day}.geojson`, JSON.stringify(fieldGeoJSON(input)), "application/geo+json");
+      if (b.dataset.field === "kml") download(`arukumae_${fileStem()}_現地マップ_${day}.kml`, fieldKml(input), "application/vnd.google-earth.kml+xml");
+      else download(`arukumae_${fileStem()}_現地マップ_${day}.geojson`, JSON.stringify(fieldGeoJSON(input)), "application/geo+json");
     }),
   );
   body.querySelector("[data-pdf]")?.addEventListener("click", () => {
@@ -408,11 +658,300 @@ function renderStep(state: AppState) {
   });
   body.querySelector("[data-reset-demo]")?.addEventListener("click", () => {
     if (!confirm("判定を見本に戻します。この端末に残した判定は消えます。よいですか？")) return;
-    localStorage.removeItem(JUDGMENTS_KEY);
-    state.judgments = new Map(state.demoJudgments.map((j) => [j.segmentId, j]));
+    state.judgments = new Map(state.demo.judgments.map((j) => [j.segmentId, j]));
+    state.unjudged.clear();
     refreshJudgments(state);
     renderStep(state);
   });
+}
+
+/* ---------- 手順 1：案件（名前・中心線・案件ファイル） ---------- */
+
+function renderProjectStep(state: AppState): string {
+  const parts: string[] = [];
+  const c = state.centerline;
+  const demo = c.source.kind === "demo";
+  parts.push(
+    `<dl class="kv"><dt>案件名</dt><dd><input class="text" data-name value="${escapeHtml(state.name)}" maxlength="60" aria-label="案件名"></dd>` +
+      `<dt>道路名</dt><dd><input class="text" data-road value="${escapeHtml(state.roadName)}" maxlength="40" placeholder="県道○○号 ○○線（参考）" aria-label="道路名"></dd>` +
+      `<dt>中心線 ${help(HELP.centerline)}</dt><dd>${escapeHtml(describeCenterline(c))}<br><span class="muted small">約 ${state.dense.length - 1} m・${c.coords.length} 点・${zoneLabel(state.zone)}で計算</span></dd>` +
+      `<dt>向き</dt><dd>${demo ? "南 → 北" : "地図の「起点 0m」→「終点」"} <button class="btn small" type="button" data-reverse>反転する</button></dd>` +
+      `<dt>伐採範囲</dt><dd>${escapeHtml(describeTrack(state.track))} ${help(HELP.band)}</dd></dl>`,
+  );
+  if (state.projectMsg) parts.push(`<p class="small ${state.projectMsg.error ? "err" : ""}">${escapeHtml(state.projectMsg.text)}</p>`);
+
+  // 中心線を決める：3 つの出どころ
+  parts.push(`<details class="center" ${demo && !state.lineChoices && !state.drawing && !state.osmPick ? "" : "open"}><summary><b>自前の道で動かす：中心線を決める</b></summary>`);
+  parts.push(`<p class="muted small">運送会社の軌跡図（KML・KMZ・GeoJSON）があればその中の線を、無ければ OpenStreetMap の道路をたどるか、航空写真の上に手で描きます。中心線を変えると、判定・距離標・記録は作り直しです（先に案件ファイルに保存できます）。</p>`);
+
+  // (a) 軌跡図の KML から選ぶ
+  parts.push(`<h4>(a) 軌跡図のファイルの線から選ぶ</h4>`);
+  parts.push(`<div class="dropzone" data-center-drop>ここに軌跡図（KML・KMZ・GeoJSON）を落とす<br><input type="file" accept=".kml,.kmz,.geojson,.json" data-center-file></div>`);
+  if (state.lineChoices) {
+    const lc = state.lineChoices;
+    parts.push(`<p class="small">「${escapeHtml(lc.file)}」の線 ${lc.choices.length} 本。中心線にする線を 1 つ選んでください（名前に「中心線」などがあれば選んであります）。残りの線は軌跡図として読みます。</p>`);
+    parts.push(`<table class="list small"><thead><tr><th></th><th>名前</th><th class="num">長さ m</th><th class="num">点</th></tr></thead><tbody>`);
+    lc.choices.forEach((ch, i) => {
+      parts.push(`<tr><td><input type="radio" name="center-line" value="${i}" ${i === lc.picked ? "checked" : ""} ${ch.ring ? "disabled" : ""} aria-label="この線"></td><td>${escapeHtml(ch.name || "（名前なし）")}${ch.ring ? '<span class="muted small"> 多角形の縁</span>' : ""}</td><td class="num">${Math.round(ch.lengthM)}</td><td class="num">${ch.coords.length}</td></tr>`);
+    });
+    parts.push(`</tbody></table>`);
+    parts.push(`<div class="row btns"><button class="btn primary" type="button" data-center-pick ${lc.picked < 0 ? "disabled" : ""}>この線を中心線にする</button><button class="btn" type="button" data-center-cancel>やめる</button></div>`);
+  }
+
+  // (b) OSM の道路をたどる
+  parts.push(`<h4>(b) OpenStreetMap の道路をたどる ${help(HELP.osm)}</h4>`);
+  const o = state.osmPick;
+  if (!o) parts.push(`<div class="actions"><button class="btn" type="button" data-osm-start>地図を押して起点と終点を指す</button></div>`);
+  else {
+    const stage = o.busy ? "道路を取ってたどっています…" : !o.start ? "地図で<b>起点</b>を押してください" : !o.end ? `起点を置きました。次に<b>終点</b>を押してください` : o.result ? `道を引きました：約 ${Math.round(o.result.lengthM)}m${o.result.roadName ? `・${escapeHtml(o.result.roadName)}` : ""}` : "";
+    parts.push(`<p class="small">${stage}</p>`);
+    if (o.error) parts.push(`<p class="small err">${escapeHtml(o.error)}</p>`);
+    parts.push(`<div class="row btns">${o.result ? `<button class="btn primary" type="button" data-osm-accept>この道を中心線にする</button>` : ""}<button class="btn" type="button" data-osm-cancel>${o.result || o.error ? "やり直す" : "やめる"}</button></div>`);
+  }
+
+  // (c) 手で描く
+  parts.push(`<h4>(c) 航空写真の上に手で描く</h4>`);
+  const d = state.drawing;
+  if (!d) parts.push(`<div class="actions"><button class="btn" type="button" data-draw-start>地図を押して描く</button></div>`);
+  else {
+    parts.push(`<p class="small">地図を押すと点が増えます。${d.points.length} 点${d.points.length >= 2 ? `・約 ${Math.round(lengthM(d.points))}m` : ""}。起点から順に、終点まで押してください。</p>`);
+    parts.push(`<div class="row btns"><button class="btn primary" type="button" data-draw-finish ${d.points.length >= 2 ? "" : "disabled"}>描き終える（中心線にする）</button><button class="btn" type="button" data-draw-undo ${d.points.length ? "" : "disabled"}>1 点戻す</button><button class="btn" type="button" data-draw-cancel>やめる</button></div>`);
+  }
+  parts.push(`</details>`);
+
+  parts.push(`<h4 class="muted small" style="margin:12px 0 4px">案件ファイル ${help(HELP.project)}</h4>`);
+  parts.push(`<div class="actions"><button class="btn" data-project-save>案件を保存する（JSON）</button></div>`);
+  parts.push(`<div class="dropzone" data-project-drop>ここに案件ファイル（.json）を落とすと、別の端末の続きができます<br><input type="file" accept=".json,application/json" data-project-file></div>`);
+  parts.push(`<p class="muted small">中身は、この端末に残しているものと同じです（中心線・伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録）。読み込むと、この端末のものはファイルの中身に置き換わります。</p>`);
+  if (!demo) parts.push(`<div class="actions"><button class="btn" data-demo-reset>見本（小川村 県道401号）に戻す</button></div>`);
+  parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。公図は市町村から自動で取得できます（法務省の地図XML の zip を落としても構いません）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</div>`);
+  parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
+  return parts.join("");
+}
+
+function showName(state: AppState) {
+  document.getElementById("project-name")!.textContent = state.name;
+  document.title = `${state.name} — アルクマエ`;
+}
+
+function wireDrop(el: HTMLElement | null, onFile: (f: File) => void) {
+  if (!el) return;
+  el.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    el.classList.add("over");
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("over"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault();
+    el.classList.remove("over");
+    const f = e.dataTransfer?.files?.[0];
+    if (f) onFile(f);
+  });
+}
+
+function wireProjectStep(state: AppState, body: HTMLElement) {
+  const name = body.querySelector<HTMLInputElement>("[data-name]");
+  name?.addEventListener("change", () => {
+    state.name = name.value.trim() || DEFAULT_NAME;
+    name.value = state.name;
+    showName(state);
+    persist(state);
+  });
+  const road = body.querySelector<HTMLInputElement>("[data-road]");
+  road?.addEventListener("change", () => {
+    state.roadName = road.value.trim();
+    persist(state);
+    renderList(state);
+  });
+  body.querySelector("[data-reverse]")?.addEventListener("click", () => {
+    applyCenterline(state, reversed(state.centerline.coords), state.roadName, state.centerline.source, { keepParcels: true, track: state.track });
+  });
+  body.querySelector("[data-project-save]")?.addEventListener("click", () => saveProjectFile(state));
+  const input = body.querySelector<HTMLInputElement>("[data-project-file]");
+  input?.addEventListener("change", () => {
+    const f = input.files?.[0];
+    if (f) readProjectFile(state, f);
+  });
+  wireDrop(body.querySelector<HTMLElement>("[data-project-drop]"), (f) => readProjectFile(state, f));
+  body.querySelector("[data-demo-reset]")?.addEventListener("click", () => resetToDemo(state));
+
+  // (a) 軌跡図の線から選ぶ
+  const cf = body.querySelector<HTMLInputElement>("[data-center-file]");
+  cf?.addEventListener("change", () => {
+    const f = cf.files?.[0];
+    if (f) readCenterFile(state, f);
+  });
+  wireDrop(body.querySelector<HTMLElement>("[data-center-drop]"), (f) => readCenterFile(state, f));
+  body.querySelectorAll<HTMLInputElement>('input[name="center-line"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      if (state.lineChoices) state.lineChoices.picked = Number(r.value);
+      renderStep(state);
+    }),
+  );
+  body.querySelector("[data-center-pick]")?.addEventListener("click", () => {
+    const lc = state.lineChoices;
+    if (!lc || lc.picked < 0) return;
+    const chosen = lc.choices[lc.picked];
+    const rest = lc.choices.filter((_, i) => i !== lc.picked).map((ch) => ch.coords);
+    const roadName = roadNameFromLine(chosen.name) || state.roadName;
+    // 残りの線（外側線・内側線・多角形）は軌跡図として読む（spec §17.2 の (a)）。無ければ架空の軌跡図（既定の車両）
+    const track: TrackSetting = rest.length ? { ...state.track, source: { kind: "file", name: lc.file, lines: rest } } : { ...state.track, source: { kind: "vehicle", preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] } };
+    applyCenterline(state, chosen.coords, roadName, { kind: "kml", file: lc.file, line: chosen.name }, { track });
+  });
+  body.querySelector("[data-center-cancel]")?.addEventListener("click", () => {
+    state.lineChoices = null;
+    renderStep(state);
+  });
+
+  // (b) OSM
+  body.querySelector("[data-osm-start]")?.addEventListener("click", () => {
+    stopMapModes(state);
+    state.osmPick = { start: null, end: null, busy: false, error: null, result: null };
+    state.map.getCanvas().style.cursor = "crosshair";
+    renderStep(state);
+  });
+  body.querySelector("[data-osm-cancel]")?.addEventListener("click", () => {
+    stopMapModes(state);
+    renderStep(state);
+  });
+  body.querySelector("[data-osm-accept]")?.addEventListener("click", () => {
+    const r = state.osmPick?.result;
+    if (!r) return;
+    const ok = applyCenterline(state, r.coords, r.roadName, { kind: "osm", wayIds: r.wayIds, fetchedAt: new Date().toISOString().slice(0, 10) });
+    if (!ok) return;
+  });
+
+  // (c) 手で描く
+  body.querySelector("[data-draw-start]")?.addEventListener("click", () => {
+    stopMapModes(state);
+    state.drawing = { points: [] };
+    state.map.getCanvas().style.cursor = "crosshair";
+    renderStep(state);
+  });
+  body.querySelector("[data-draw-undo]")?.addEventListener("click", () => {
+    state.drawing?.points.pop();
+    showDraft(state);
+    renderStep(state);
+  });
+  body.querySelector("[data-draw-cancel]")?.addEventListener("click", () => {
+    stopMapModes(state);
+    renderStep(state);
+  });
+  body.querySelector("[data-draw-finish]")?.addEventListener("click", () => {
+    const pts = state.drawing?.points ?? [];
+    if (pts.length < 2) return;
+    applyCenterline(state, pts, state.roadName, { kind: "drawn" });
+  });
+}
+
+/** 地図を押して何かをする最中のものを全部やめる（描く・OSM・距離標・起立の区間） */
+function stopMapModes(state: AppState) {
+  state.drawing = null;
+  state.osmPick = null;
+  state.placingKp = false;
+  state.placingTilt = null;
+  state.map.getCanvas().style.cursor = "";
+  setDraft(state.map, null, []);
+}
+
+/** 下書き（描いている線・OSM の起点終点と結果）を地図に出す */
+function showDraft(state: AppState) {
+  if (state.drawing) {
+    const pts = state.drawing.points;
+    setDraft(state.map, pts, pts.map((p, i) => ({ coords: p, label: i === 0 ? "起点" : i === pts.length - 1 ? "終点" : "" })));
+  } else if (state.osmPick) {
+    const o = state.osmPick;
+    const points = [o.start ? { coords: o.start, label: "起点" } : null, o.end ? { coords: o.end, label: "終点" } : null].filter((x): x is { coords: LonLat; label: string } => !!x);
+    setDraft(state.map, o.result?.coords ?? null, points);
+  } else setDraft(state.map, null, []);
+}
+
+async function readCenterFile(state: AppState, f: File) {
+  try {
+    const lines = parseNamedBytes(f.name, new Uint8Array(await f.arrayBuffer()));
+    if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
+    const choices = lineChoices(lines);
+    state.lineChoices = { file: f.name, choices, picked: pickCenterline(choices) };
+    state.projectMsg = null;
+  } catch (e) {
+    state.projectMsg = { text: `${f.name} を読めませんでした：${(e as Error).message}`, error: true };
+  }
+  renderStep(state);
+}
+
+/** 地図を押して OSM の起点・終点を指す。2 点そろったら道路を取ってたどる */
+async function pickOsm(state: AppState, lonLat: LonLat) {
+  const o = state.osmPick;
+  if (!o || o.busy || o.result) return;
+  if (!o.start) o.start = lonLat;
+  else if (!o.end) o.end = lonLat;
+  showDraft(state);
+  renderStep(state);
+  if (!o.start || !o.end) return;
+  o.busy = true;
+  o.error = null;
+  state.map.getCanvas().style.cursor = "";
+  renderStep(state);
+  try {
+    const ways = await fetchRoads(routeBbox(o.start, o.end));
+    if (!ways.length) throw new Error("この辺りに OpenStreetMap の道路がありません。「手で描く」で引いてください");
+    const g = buildGraph(ways);
+    const a = snapToRoad(g, o.start);
+    const b = snapToRoad(g, o.end);
+    if (!a) throw new Error("起点の近く（100m 以内）に道路がありません。道路の上を押してください");
+    if (!b) throw new Error("終点の近く（100m 以内）に道路がありません。道路の上を押してください");
+    const path = shortestPath(g, a.node, b.node);
+    if (!path) throw new Error("起点と終点が道路でつながっていません（取った範囲の外を通るのかもしれません）。「手で描く」で引いてください");
+    o.result = { coords: path.coords, wayIds: path.wayIds, roadName: roadNameOf(g, path.wayIds), lengthM: path.lengthM };
+  } catch (e) {
+    o.error = (e as Error).message;
+    o.start = null;
+    o.end = null;
+    state.map.getCanvas().style.cursor = "crosshair";
+  } finally {
+    o.busy = false;
+    showDraft(state);
+    renderStep(state);
+  }
+}
+
+function drawPoint(state: AppState, lonLat: LonLat) {
+  if (!state.drawing) return;
+  state.drawing.points.push(lonLat);
+  showDraft(state);
+  renderStep(state);
+}
+
+function saveProjectFile(state: AppState) {
+  const p = currentProject(state);
+  const text = JSON.stringify(p);
+  const day = new Date().toISOString().slice(0, 10);
+  download(projectFileName(state.name, day), text, "application/json");
+  state.projectMsg = { text: `保存しました（${(text.length / 1e6).toFixed(1)} MB）：${describeProject(p)}`, error: false };
+  renderStep(state);
+}
+
+async function readProjectFile(state: AppState, f: File) {
+  try {
+    const p = parseProject(await f.text(), { coords: state.demo.coords, roadName: state.demo.roadName });
+    loadProject(state, p);
+    state.projectMsg = { text: `読み込みました：${describeProject(p)}`, error: false };
+    state.step = 1;
+    renderStep(state);
+  } catch (e) {
+    state.projectMsg = { text: `${f.name} を読めませんでした：${(e as Error).message}`, error: true };
+    renderStep(state);
+  }
+}
+
+/** 見本に戻す。いまの案件は消えるので、保存するか聞く（spec §17.1） */
+function resetToDemo(state: AppState) {
+  if (confirm("いまの案件を案件ファイル（JSON）に保存してから、見本に戻しますか？\n「OK」で保存してから戻す、「キャンセル」で保存せずに戻す")) saveProjectFile(state);
+  else if (!confirm("保存せずに見本に戻します。いまの案件（中心線・公図・判定・記録）はこの端末から消えます。よいですか？")) return;
+  loadProject(state, demoProject(state.demo));
+  state.projectMsg = { text: "見本（小川村 県道401号）に戻しました", error: false };
+  state.step = 1;
+  renderStep(state);
 }
 
 /* ---------- 手順 2：伐採範囲の決め方（軌跡図・架空の軌跡図・仮の帯） ---------- */
@@ -560,20 +1099,7 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
     const f = fileInput.files?.[0];
     if (f) readTrackFile(state, f);
   });
-  const drop = body.querySelector<HTMLElement>("[data-drop]");
-  if (drop) {
-    drop.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      drop.classList.add("over");
-    });
-    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-    drop.addEventListener("drop", (e) => {
-      e.preventDefault();
-      drop.classList.remove("over");
-      const f = e.dataTransfer?.files?.[0];
-      if (f) readTrackFile(state, f);
-    });
-  }
+  wireDrop(body.querySelector<HTMLElement>("[data-drop]"), (f) => readTrackFile(state, f));
   wireTiltZones(state, body);
   wireParcelStep(state, body);
   body.querySelectorAll<HTMLButtonElement>("[data-save-track]").forEach((b) =>
@@ -582,10 +1108,12 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
       const day = new Date().toISOString().slice(0, 10);
       const zones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones : [];
       const zoneNote = zones.length ? `起立の区間：${zones.map((z) => `${z.fromM}〜${z.toM}m を ${z.tilt}°`).join("、")}。` : "";
-      const title = `${state.roadName} ${state.track.source.kind === "vehicle" ? "架空の軌跡図" : "軌跡"}（アルクマエ）`;
-      const desc = `${describeTrack(state.track)}。${zoneNote}アルクマエで ${day} に作成。${state.track.source.kind === "vehicle" ? "車両の寸法と道路の中心線（OpenStreetMap）から計算した架空の軌跡図で、実在の輸送計画ではありません。" : ""}現地の確認なしに使わないでください。`;
-      if (b.dataset.saveTrack === "kml") download(`arukumae_${state.roadName}_軌跡_${day}.kml`, trackKml(fc, title, desc), "application/vnd.google-earth.kml+xml");
-      else download(`arukumae_${state.roadName}_軌跡_${day}.geojson`, JSON.stringify({ ...fc, features: fc.features.filter((f) => f.properties.kind !== "tilt"), title, description: desc }), "application/geo+json");
+      const road = state.roadName || state.name;
+      const title = `${road} ${state.track.source.kind === "vehicle" ? "架空の軌跡図" : "軌跡"}（アルクマエ）`;
+      const desc = `${describeTrack(state.track)}。${zoneNote}アルクマエで ${day} に作成。${state.track.source.kind === "vehicle" ? "車両の寸法と道路の中心線から計算した架空の軌跡図で、実在の輸送計画ではありません。" : ""}現地の確認なしに使わないでください。`;
+      const stem = road.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 30) || "案件";
+      if (b.dataset.saveTrack === "kml") download(`arukumae_${stem}_軌跡_${day}.kml`, trackKml(fc, title, desc), "application/vnd.google-earth.kml+xml");
+      else download(`arukumae_${stem}_軌跡_${day}.geojson`, JSON.stringify({ ...fc, features: fc.features.filter((f) => f.properties.kind !== "tilt"), title, description: desc }), "application/geo+json");
     }),
   );
 }
@@ -636,9 +1164,10 @@ function wireTiltZones(state: AppState, body: HTMLElement) {
     setZones(addZone(src.tiltZones, z));
   });
   body.querySelector("[data-place-tilt]")?.addEventListener("click", () => {
-    state.placingTilt = state.placingTilt ? null : { fromM: null };
-    state.placingKp = false;
-    state.map.getCanvas().style.cursor = state.placingTilt ? "crosshair" : "";
+    const on = !state.placingTilt;
+    stopMapModes(state);
+    state.placingTilt = on ? { fromM: null } : null;
+    state.map.getCanvas().style.cursor = on ? "crosshair" : "";
     renderStep(state);
   });
 }
@@ -689,7 +1218,7 @@ async function readTrackFile(state: AppState, f: File) {
   try {
     const lines = parseTrackBytes(f.name, new Uint8Array(await f.arrayBuffer()));
     if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
-    state.track = { ...state.track, source: { kind: "file", name: f.name, lines: linesToPlane(lines) } };
+    state.track = { ...state.track, source: { kind: "file", name: f.name, lines } };
     state.trackError = null;
     rebuildTrack(state); // 覆いの確認（別の道の軌跡図かどうか）は rebuildTrackNow の中。計算が後回しなので、ここで結果は読めない
   } catch (e) {
@@ -707,36 +1236,79 @@ function parcelsToGeoJSON(parcels: ParcelFeature[]): FeatureCollection<Polygon> 
 function describeParcels(state: AppState): string {
   const s = state.parcelSource;
   const mapCount = new Set(state.parcels.map((p) => p.properties.map)).size;
-  if (!s.fromFile) return `小川村 2026年版（見本。地図 ${mapCount} 枚、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}）`;
+  if (!s.fromFile) return state.centerline.source.kind === "demo" ? `小川村 2026年版（見本。地図 ${mapCount} 枚、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}）` : "まだありません";
   const pub = s.maps.filter((m) => m.isPublic).length;
   const arb = s.maps.length - pub;
-  return `${s.fileName}：地図 ${s.maps.length} 枚（公共座標系 ${pub}${arb ? `・任意座標系 ${arb} は読み飛ばし` : ""}）、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}`;
+  const cities = [...new Set(s.maps.filter((m) => m.city).map((m) => m.city))];
+  return `${s.fileName}${cities.length ? `（${cities.join("・")}）` : ""}：地図 ${s.maps.length} 枚（公共座標系 ${pub}${arb ? `・任意座標系 ${arb} は読み飛ばし` : ""}）、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}`;
 }
 
 function renderParcelStep(state: AppState): string {
   const s = state.parcelSource;
   const parts: string[] = [`<h4>公図（地図XML） ${help(HELP.mojxml)}</h4>`];
-  parts.push(`<p>いま：${escapeHtml(describeParcels(state))}${s.fromFile && !s.persisted ? '<br><span class="muted small">大きいのでこの端末には残せません。ページを開き直すと見本に戻ります。</span>' : ""}</p>`);
+  parts.push(`<p>いま：${escapeHtml(describeParcels(state))}</p>`);
   const run = state.parcelRun;
+  const fr = state.fetchRun;
   if (run) {
     const mb = (b: number) => (b / 1e6).toFixed(1);
     parts.push(`<div class="progress"><i style="width:${run.total ? (100 * run.bytes) / run.total : 0}%"></i></div>`);
-    parts.push(`<p class="small">読んでいます… ${mb(run.bytes)} / ${mb(run.total)} MB。地図 ${run.maps} 枚、区間の周りの筆 ${run.kept}${run.current ? `<br><span class="muted">${escapeHtml(run.current)}</span>` : ""}</p>`);
+    parts.push(`<p class="small">${escapeHtml(run.label)}… ${mb(run.bytes)} / ${run.total ? mb(run.total) : "?"} MB。地図 ${run.maps} 枚、区間の周りの筆 ${run.kept}${run.current ? `<br><span class="muted">${escapeHtml(run.current)}</span>` : ""}</p>`);
+  } else if (fr) {
+    parts.push(renderFetch(fr));
   } else {
-    parts.push(`<div class="dropzone" data-parcel-drop>ここに公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
-    if (state.parcelError) parts.push(`<p class="small" style="color:#c62828">${escapeHtml(state.parcelError)}</p>`);
+    parts.push(`<div class="actions"><button class="btn primary" data-fetch-start>市町村を調べて公図を自動で取得する ${help(HELP.mojfetch)}</button></div>`);
+    parts.push(`<div class="dropzone" data-parcel-drop>または、ここに公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
+    if (state.parcelError) parts.push(`<p class="small err">${escapeHtml(state.parcelError)}</p>`);
     if (s.fromFile && s.maps.length) {
-      parts.push(`<details><summary>地図ごとの内訳（${s.maps.length} 枚）</summary><table class="list small"><thead><tr><th>地図</th><th>座標系</th><th class="num">筆</th><th class="num">残した</th></tr></thead><tbody>`);
+      parts.push(`<details><summary>地図ごとの内訳（${s.maps.length} 枚）</summary><table class="list small"><thead><tr><th>地図</th><th>市区町村</th><th>座標系</th><th class="num">筆</th><th class="num">残した</th></tr></thead><tbody>`);
       for (const m of [...s.maps].sort((a, b) => b.kept - a.kept || a.stem.localeCompare(b.stem))) {
-        parts.push(`<tr><td>${escapeHtml(m.stem)}</td><td>${escapeHtml(m.crs || "？")}</td><td class="num">${m.total}</td><td class="num">${m.isPublic ? m.kept : "—"}</td></tr>`);
+        parts.push(`<tr><td>${escapeHtml(m.stem)}</td><td>${escapeHtml(m.city)}</td><td>${escapeHtml(m.crs || "？")}</td><td class="num">${m.total}</td><td class="num">${m.isPublic ? m.kept : "—"}</td></tr>`);
       }
       parts.push(`</tbody></table></details>`);
-      parts.push(`<div class="row btns"><button class="btn small" data-parcel-demo>見本の公図に戻す</button></div>`);
+      if (s.sources.length) parts.push(`<p class="muted small">出どころ：${s.sources.map((x) => `<a href="${escapeHtml(x.datasetUrl)}" target="_blank" rel="noopener">${escapeHtml(x.city)} ${escapeHtml(x.zip)}</a>（${escapeHtml(x.fetchedAt)} に取得）`).join("・")}</p>`);
+      if (state.centerline.source.kind === "demo") parts.push(`<div class="row btns"><button class="btn small" data-parcel-demo>見本の公図に戻す</button></div>`);
     }
   }
   parts.push(
-    `<p class="muted small">法務省「登記所備付地図データ」の zip をそのまま落とせます（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${PARCEL_BUFFER_M}m の筆だけを残します。170MB ほどの地図でも数秒。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
+    `<p class="muted small">法務省「登記所備付地図データ」の zip をそのまま落とせます（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${PARCEL_BUFFER_M}m の筆と中心線を包む筆だけを残します。170MB ほどの地図でも数秒。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
   );
+  return parts.join("");
+}
+
+/** 公図の自動取得の途中の画面：市町村 → データセット → 同意 → 取得 */
+function renderFetch(fr: FetchRun): string {
+  const parts: string[] = [];
+  if (fr.phase === "cities") {
+    parts.push(`<p class="small">中心線と両側 ${PARCEL_BUFFER_M}m の点（100m ごと）がどの市町村にあるかを OpenStreetMap で調べ、G空間情報センターでデータセットを探しています…</p>`);
+    parts.push(`<div class="actions"><button class="btn" data-fetch-cancel>やめる</button></div>`);
+    return parts.join("");
+  }
+  if (fr.error) parts.push(`<p class="small err">${escapeHtml(fr.error)}</p>`);
+  const ready = fr.items.filter((it) => it.dataset);
+  parts.push(`<p class="small">通る市町村 <b>${fr.items.length}</b>。それぞれの「登記所備付地図データ」（法務省）のいちばん新しい年版：</p>`);
+  parts.push(`<table class="list small"><thead><tr><th>市町村</th><th>コード</th><th>年版・zip</th><th class="num">大きさ</th><th></th></tr></thead><tbody>`);
+  for (const it of fr.items) {
+    const d = it.dataset;
+    parts.push(
+      `<tr><td>${escapeHtml(it.muni.name)}</td><td>${escapeHtml(it.muni.code ?? "？")}</td>` +
+        `<td>${d ? `<a href="${escapeHtml(d.datasetUrl)}" target="_blank" rel="noopener">${escapeHtml(d.year)}年版 ${escapeHtml(d.zipName)}</a>` : `<span class="err">${escapeHtml(it.error ?? "見つかりません")}</span>`}</td>` +
+        `<td class="num">${d ? fmtMb(d.size) : ""}</td><td>${it.done ? `済（筆 ${it.kept}）` : fr.phase === "download" && d ? "…" : ""}</td></tr>`,
+    );
+  }
+  parts.push(`</tbody></table>`);
+  if (fr.phase === "choose") {
+    parts.push(`<div class="row" style="display:flex;gap:6px;margin:6px 0"><input class="text" data-fetch-extra placeholder="市町村を足す（例：○○町）" aria-label="市町村を足す"><button class="btn small" data-fetch-add>探す</button></div>`);
+    parts.push(`<p class="muted small">境に沿う道で隣の市町村が抜けていれば、名前で足せます。zip の名前が市区町村コードで始まるものだけを選びます（同名の町村を取り違えないため）。コードが分からない市町村は、タグの名前で探し、2 つ以上に当たれば見つからない扱いにします。</p>`);
+    const license = ready.find((it) => it.dataset?.licenseUrl)?.dataset?.licenseUrl ?? "https://www.geospatial.jp/ckan/dataset/houmusyouchizu-2026-1-995";
+    parts.push(
+      `<label class="row" style="display:flex;gap:6px;align-items:flex-start;font-size:13px;margin:8px 0"><input type="checkbox" data-fetch-agree ${fr.agreed ? "checked" : ""}> <span>登記所備付地図データの<a href="${escapeHtml(license)}" target="_blank" rel="noopener">利用規約（法務省）</a>を読み、同意します。取得したデータの出典「登記所備付地図データ ○○（法務省）」と「加工して作成」は、地図・書き出し・PDF に道具が付けます。</span></label>`,
+    );
+    const total = ready.reduce((a, it) => a + (it.dataset!.size ?? 0), 0);
+    parts.push(`<div class="row btns"><button class="btn primary" data-fetch-go ${fr.agreed && ready.length ? "" : "disabled"}>取得して読み込む（${ready.length} 件、約 ${fmtMb(total)}）</button><button class="btn" data-fetch-cancel>やめる</button></div>`);
+    parts.push(`<p class="muted small">大きな市（数百 MB）は時間がかかります。取得は G空間情報センターから直接で、ファイルはこの端末の中で読み、外へ出しません。</p>`);
+  } else {
+    parts.push(`<p class="small">取得して読んでいます…（順に。読み終えた市町村から筆を合わせます）</p>`);
+  }
   return parts.join("");
 }
 
@@ -746,183 +1318,175 @@ function wireParcelStep(state: AppState, body: HTMLElement) {
     const f = input.files?.[0];
     if (f) importParcels(state, f);
   });
-  const drop = body.querySelector<HTMLElement>("[data-parcel-drop]");
-  if (drop) {
-    drop.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      drop.classList.add("over");
-    });
-    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-    drop.addEventListener("drop", (e) => {
-      e.preventDefault();
-      drop.classList.remove("over");
-      const f = e.dataTransfer?.files?.[0];
-      if (f) importParcels(state, f);
-    });
-  }
+  wireDrop(body.querySelector<HTMLElement>("[data-parcel-drop]"), (f) => importParcels(state, f));
   body.querySelector("[data-parcel-demo]")?.addEventListener("click", () => {
-    localStorage.removeItem(PARCELS_KEY);
-    state.parcelSource = { fromFile: false, fileName: null, maps: [], skipped: [], persisted: true };
+    state.parcelSource = { fromFile: false, fileName: null, maps: [], skipped: [], sources: [] };
     state.parcelError = null;
-    applyParcels(state, state.demoParcels);
+    applyParcels(state, state.demo.parcels);
+    updateAttribution(state);
   });
-}
-
-/* ---------- 手順 1：案件名と案件ファイル ---------- */
-
-function showName(state: AppState) {
-  document.getElementById("project-name")!.textContent = state.name;
-  document.title = `${state.name} — アルクマエ`;
-}
-
-function wireProjectStep(state: AppState, body: HTMLElement) {
-  const name = body.querySelector<HTMLInputElement>("[data-name]");
-  name?.addEventListener("change", () => {
-    state.name = name.value.trim() || DEFAULT_NAME;
-    name.value = state.name;
-    localStorage.setItem(NAME_KEY, state.name);
-    showName(state);
+  body.querySelector("[data-fetch-start]")?.addEventListener("click", () => startFetch(state));
+  body.querySelector("[data-fetch-cancel]")?.addEventListener("click", () => {
+    if (state.fetchRun?.phase === "download") return; // 取得の途中は止めない（ワーカーが終わるまで）
+    state.fetchRun = null;
+    renderStep(state);
   });
-  body.querySelector("[data-project-save]")?.addEventListener("click", () => saveProjectFile(state));
-  const input = body.querySelector<HTMLInputElement>("[data-project-file]");
-  input?.addEventListener("change", () => {
-    const f = input.files?.[0];
-    if (f) readProjectFile(state, f);
+  body.querySelector<HTMLInputElement>("[data-fetch-agree]")?.addEventListener("change", (e) => {
+    if (state.fetchRun) state.fetchRun.agreed = (e.target as HTMLInputElement).checked;
+    renderStep(state);
   });
-  const drop = body.querySelector<HTMLElement>("[data-project-drop]");
-  if (drop) {
-    drop.addEventListener("dragover", (e) => {
+  body.querySelector("[data-fetch-add]")?.addEventListener("click", () => addFetchCity(state, body.querySelector<HTMLInputElement>("[data-fetch-extra]")?.value ?? ""));
+  body.querySelector<HTMLInputElement>("[data-fetch-extra]")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
       e.preventDefault();
-      drop.classList.add("over");
-    });
-    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-    drop.addEventListener("drop", (e) => {
-      e.preventDefault();
-      drop.classList.remove("over");
-      const f = e.dataTransfer?.files?.[0];
-      if (f) readProjectFile(state, f);
-    });
-  }
+      addFetchCity(state, (e.target as HTMLInputElement).value);
+    }
+  });
+  body.querySelector("[data-fetch-go]")?.addEventListener("click", () => downloadAll(state));
 }
 
-function saveProjectFile(state: AppState) {
-  const s = state.parcelSource;
-  const p = buildProject({
-    name: state.name,
-    roadName: state.roadName,
-    track: state.track,
-    parcels: s.fromFile ? { fileName: s.fileName ?? "", maps: s.maps, skipped: s.skipped, features: state.parcels } : null,
-    judgments: [...state.judgments.values()],
-    kps: state.kps,
-    notes: pruneNotes(state.notes),
-  });
-  const text = JSON.stringify(p);
-  const day = new Date().toISOString().slice(0, 10);
-  download(projectFileName(state.name, day), text, "application/json");
-  state.projectMsg = { text: `保存しました（${(text.length / 1e6).toFixed(1)} MB）：${describeProject(p)}`, error: false };
+/** 公図の自動取得：市町村を当て、データセットを探す（spec §17.3 の 1・2） */
+async function startFetch(state: AppState) {
+  if (state.fetchRun || state.parcelRun) return;
+  const fr: FetchRun = { phase: "cities", items: [], agreed: false, error: null, features: [], maps: [], skipped: [], sources: [] };
+  state.fetchRun = fr;
+  state.parcelError = null;
   renderStep(state);
-}
-
-async function readProjectFile(state: AppState, f: File) {
   try {
-    const p = parseProject(await f.text());
-    // いまは見本の区間だけなので、別の道路の案件は判定が区切りと合わない。読まずに伝える
-    if (p.roadName && p.roadName !== state.roadName) throw new Error(`別の区間（${p.roadName}）の案件です。この道具はいま ${state.roadName} の見本の区間だけを扱います`);
-    applyProject(state, p);
+    const munis = await findMunicipalities(samplePoints(state.centerline.coords, 100, PARCEL_BUFFER_M));
+    if (state.fetchRun !== fr) return;
+    if (!munis.length) throw new Error("市町村を当てられませんでした（OpenStreetMap の行政境界が無い所か、通信の問題）。下で市町村の名前を足してください");
+    for (const muni of munis) {
+      let dataset: MojDataset | null = null;
+      let error: string | null = null;
+      try {
+        dataset = await searchDataset(muni.name, muni.code);
+        if (!dataset) error = muni.code ? `コード ${muni.code} の zip が見つかりません（まだ公開されていない市町村かもしれません）` : "コードが分からず、名前では 1 つに決められません";
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      fr.items.push({ muni, dataset, error, done: false, kept: 0 });
+    }
   } catch (e) {
-    state.projectMsg = { text: `${f.name} を読めませんでした：${(e as Error).message}`, error: true };
+    fr.error = (e as Error).message;
+  }
+  if (state.fetchRun !== fr) return;
+  fr.phase = "choose";
+  renderStep(state);
+}
+
+async function addFetchCity(state: AppState, name: string) {
+  const fr = state.fetchRun;
+  const n = name.trim();
+  if (!fr || fr.phase !== "choose" || !n) return;
+  if (fr.items.some((it) => it.muni.name === n)) return;
+  const muni: Municipality = { name: n, code: null, level: 7, osmId: 0 };
+  let dataset: MojDataset | null = null;
+  let error: string | null = null;
+  try {
+    dataset = await searchDataset(n, null);
+    if (!dataset) error = "名前で 1 つに決められません（同名の市町村があるか、まだ公開されていません）";
+  } catch (e) {
+    error = (e as Error).message;
+  }
+  if (dataset) muni.code = dataset.code;
+  fr.items.push({ muni, dataset, error, done: false, kept: 0 });
+  renderStep(state);
+}
+
+/** 同意のあと、市町村ごとに順に取得して読み、筆を合わせる（spec §17.3 の 3・4） */
+async function downloadAll(state: AppState) {
+  const fr = state.fetchRun;
+  if (!fr || fr.phase !== "choose" || !fr.agreed) return;
+  fr.phase = "download";
+  fr.error = null;
+  renderStep(state);
+  const today = new Date().toISOString().slice(0, 10);
+  for (const it of fr.items) {
+    if (!it.dataset || state.fetchRun !== fr) continue;
+    const d = it.dataset;
+    try {
+      const r = await runParcelWorker(state, { kind: "url", url: d.zipUrl, name: d.zipName, total: d.size ?? 0 }, `${d.city} を取得して読んでいます`);
+      if (!r.maps.length) throw new Error(`${d.zipName} は地図XML ではないようです`);
+      fr.features.push(...r.features);
+      fr.maps.push(...r.maps);
+      fr.skipped.push(...r.skipped);
+      fr.sources.push({ city: d.city, code: d.code, zip: d.zipName, datasetUrl: d.datasetUrl, fetchedAt: today });
+      it.done = true;
+      it.kept = r.features.length;
+    } catch (e) {
+      it.error = `${d.zipName}：${(e as Error).message}`;
+      it.dataset = null;
+    }
     renderStep(state);
   }
-}
-
-/** 案件ファイルの中身で、この端末のものを置き換える。残す先（localStorage）も同じにし、開き直しても続く */
-function applyProject(state: AppState, p: ProjectFile) {
-  state.name = p.name || DEFAULT_NAME;
-  localStorage.setItem(NAME_KEY, state.name);
-  showName(state);
-  state.track = p.track;
-  state.trackError = null;
-  state.judgments = new Map(p.judgments.map((j) => [j.segmentId, j]));
-  saveJudgments(state);
-  state.kps = p.kps;
-  state.notes = new Map(p.notes.map((n) => [n.segmentId, n]));
-  saveNotes(state);
-  state.projectMsg = { text: `読み込みました：${describeProject(p)}`, error: false };
-  state.parcelError = null;
-  if (p.parcels) {
-    let persisted = true;
-    try {
-      localStorage.setItem(PARCELS_KEY, JSON.stringify({ fileName: p.parcels.fileName, maps: p.parcels.maps as MapReport[], skipped: p.parcels.skipped, features: p.parcels.features } satisfies SavedParcels));
-    } catch {
-      persisted = false;
-      localStorage.removeItem(PARCELS_KEY);
-    }
-    state.parcelSource = { fromFile: true, fileName: p.parcels.fileName, maps: p.parcels.maps as MapReport[], skipped: p.parcels.skipped, persisted };
-    applyParcels(state, p.parcels.features);
-  } else {
-    localStorage.removeItem(PARCELS_KEY);
-    state.parcelSource = { fromFile: false, fileName: null, maps: [], skipped: [], persisted: true };
-    applyParcels(state, state.demoParcels);
+  if (state.fetchRun !== fr) return;
+  state.fetchRun = null;
+  const failed = fr.items.filter((it) => !it.done && it.error).map((it) => `${it.muni.name}（${it.error}）`);
+  if (!fr.features.length) {
+    state.parcelError = `公図を取得しましたが、この区間の両側 ${PARCEL_BUFFER_M}m に筆がありません${failed.length ? `。失敗：${failed.join("、")}` : "（公共座標系の地図が無いのかもしれません）"}`;
+    renderStep(state);
+    return;
   }
-  // applyParcels → rebuildTrack が区切り・かかる筆・一覧・手順を作り直す。距離標は別の源なのでここで
-  refreshKps(state);
-  state.step = 1;
-  renderStep(state);
+  // 見本の筆と足さない：取得した筆だけにする（同じ市町村なら同じ筆の id になり、重なるため）
+  state.parcelSource = { fromFile: true, fileName: fr.sources.map((s) => s.zip).join("・"), maps: fr.maps, skipped: fr.skipped, sources: fr.sources };
+  state.parcelError = failed.length ? `取得できなかった市町村：${failed.join("、")}。手で zip を落とすか、あとでもう一度` : null;
+  applyParcels(state, fr.features);
+  updateAttribution(state);
 }
 
-/** 公図のファイルをワーカーで読み、区間の周りの筆に入れ替える */
-function importParcels(state: AppState, file: File) {
-  if (state.parcelRun) return;
-  state.parcelRun = { bytes: 0, total: file.size, maps: 0, kept: 0, current: null };
+/** 落とされた公図のファイルをワーカーで読み、区間の周りの筆に入れ替える */
+async function importParcels(state: AppState, file: File) {
+  if (state.parcelRun || state.fetchRun) return;
   state.parcelError = null;
-  renderStep(state);
-  const worker = new Worker(new URL("./core/mojxml.worker.ts", import.meta.url), { type: "module" });
-  worker.onmessage = (e: MessageEvent<WorkerOut>) => {
-    const m = e.data;
-    if (m.type === "progress") {
-      state.parcelRun = { bytes: m.bytes, total: m.total, maps: m.maps, kept: m.kept, current: m.current };
-      if (state.step === 2) renderStep(state);
-      return;
-    }
-    worker.terminate();
-    state.parcelRun = null;
-    if (m.type === "error") {
-      state.parcelError = `${file.name} を読めませんでした：${m.message}`;
-      renderStep(state);
-      return;
-    }
+  try {
+    const m = await runParcelWorker(state, { kind: "file", file }, "読んでいます");
     const pub = m.maps.filter((x) => x.isPublic);
-    if (!m.maps.length) {
-      state.parcelError = `${file.name} は地図XML ではないようです。法務省の地図データの zip か、その中の XML を落としてください。`;
-      renderStep(state);
-      return;
-    }
+    if (!m.maps.length) throw new Error(`${file.name} は地図XML ではないようです。法務省の地図データの zip か、その中の XML を落としてください。`);
     if (!m.features.length) {
-      state.parcelError = pub.length
-        ? `${file.name} を読みましたが（地図 ${m.maps.length} 枚）、この区間の両側 ${PARCEL_BUFFER_M}m に筆がありません。別の市町村の地図かもしれません。`
-        : `${file.name} の地図 ${m.maps.length} 枚は全部任意座標系で、位置を合わせないと重なりません（まだ対応していません）。`;
-      renderStep(state);
-      return;
+      throw new Error(
+        pub.length
+          ? `${file.name} を読みましたが（地図 ${m.maps.length} 枚）、この区間の両側 ${PARCEL_BUFFER_M}m に筆がありません。別の市町村の地図かもしれません。`
+          : `${file.name} の地図 ${m.maps.length} 枚は全部任意座標系で、位置を合わせないと重なりません（まだ対応していません）。`,
+      );
     }
-    // この端末に残す（大きければ残せない。その旨を画面に出す）
-    let persisted = true;
-    try {
-      localStorage.setItem(PARCELS_KEY, JSON.stringify({ fileName: file.name, maps: m.maps, skipped: m.skipped, features: m.features } satisfies SavedParcels));
-    } catch {
-      persisted = false;
-      localStorage.removeItem(PARCELS_KEY);
-    }
-    state.parcelSource = { fromFile: true, fileName: file.name, maps: m.maps, skipped: m.skipped, persisted };
+    state.parcelSource = { fromFile: true, fileName: file.name, maps: m.maps, skipped: m.skipped, sources: [] };
     applyParcels(state, m.features);
+    updateAttribution(state);
     console.info(`公図を読んだ：${file.name}、地図 ${m.maps.length} 枚、筆 ${m.features.length}（${m.ms}ms）`);
-  };
-  worker.onerror = (e) => {
-    worker.terminate();
-    state.parcelRun = null;
-    state.parcelError = `${file.name} を読めませんでした：${e.message}`;
+  } catch (e) {
+    state.parcelError = (e as Error).message.startsWith(file.name) ? (e as Error).message : `${file.name} を読めませんでした：${(e as Error).message}`;
     renderStep(state);
-  };
-  worker.postMessage({ file, dense: state.dense, bufferM: PARCEL_BUFFER_M } satisfies WorkerIn);
+  }
+}
+
+/** 公図をワーカーで読む（ファイルか URL）。進み具合は state.parcelRun に入れて手順 2 を描き直す */
+function runParcelWorker(state: AppState, source: WorkerSource, label: string): Promise<Extract<WorkerOut, { type: "done" }>> {
+  state.parcelRun = { bytes: 0, total: source.kind === "file" ? source.file.size : source.total, maps: 0, kept: 0, current: null, label };
+  renderStep(state);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./core/mojxml.worker.ts", import.meta.url), { type: "module" });
+    const finish = () => {
+      worker.terminate();
+      state.parcelRun = null;
+    };
+    worker.onmessage = (e: MessageEvent<WorkerOut>) => {
+      const m = e.data;
+      if (m.type === "progress") {
+        state.parcelRun = { bytes: m.bytes, total: m.total || state.parcelRun?.total || 0, maps: m.maps, kept: m.kept, current: m.current, label };
+        if (state.step === 2) renderStep(state);
+        return;
+      }
+      finish();
+      if (m.type === "error") reject(new Error(m.message));
+      else resolve(m);
+    };
+    worker.onerror = (e) => {
+      finish();
+      reject(new Error(e.message));
+    };
+    worker.postMessage({ source, dense: state.dense, bufferM: PARCEL_BUFFER_M, zone: state.zone } satisfies WorkerIn);
+  });
 }
 
 /** 現地マップ（KML・GeoJSON）の材料。伐採範囲の外側は、掃く範囲があるときだけ入れる */
@@ -931,7 +1495,7 @@ function fieldMapInput(state: AppState, day: string): FieldMapInput {
     .features.filter((f) => f.properties.kind === "cut" && f.geometry.type === "LineString")
     .map((f) => (f.geometry as { coordinates: Position[] }).coordinates);
   return {
-    title: `${state.roadName} 現地マップ（アルクマエ）`,
+    title: `${state.roadName || state.name} 現地マップ（アルクマエ）`,
     roadName: state.roadName,
     dense: state.dense,
     hits: state.hits,
@@ -952,11 +1516,13 @@ function applyParcels(state: AppState, parcels: ParcelFeature[]) {
   for (const h of state.hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: false });
   state.parcels = parcels;
   state.parcelById = new Map(parcels.map((p) => [p.properties.id, p]));
+  // 拾い直し（rebuildTrack）は一拍あとに走る。その間に一覧を描くと古いかかる筆が新しい筆の表を引いて落ちるので、先に空にする
+  state.hits = [];
+  state.hitById = new Map();
   setSourceData(state.map, "parcels", parcelsToGeoJSON(parcels));
   rebuildTrack(state);
 }
 
-/** 伐採範囲の決め方が変わったとき、区切り・かかる筆・地図・一覧を全部作り直す */
 /**
  * 伐採範囲の作り直し。筆の拾い直し（turf の重なり計算、数千筆 × 数百区切り）に 1〜3 秒かかり、その間は画面が止まる
  * （起立の区間を足したら数秒固まった、と 2026-11-03 に言われた）。先に「計算中」を出し、描かれてから計算する
@@ -993,7 +1559,7 @@ function rebuildTrackNow(state: AppState) {
   setSourceData(state.map, "hit-areas", hitsToGeoJSON(hits));
   setSourceData(state.map, "track", trackGeo(state));
   clearSelection(state);
-  saveTrack(TRACK_KEY, state.track);
+  persist(state);
   renderList(state);
   renderChecks(state);
   renderStep(state);
@@ -1033,19 +1599,22 @@ function renderJudgeStep(state: AppState): string {
   } else {
     const usd = estimateCost(windows.length, model, review, !!photo2);
     parts.push(
-      `<div class="actions"><button class="btn primary" data-judge ${hasKey ? "" : "disabled"}>${judged ? "全部を判定し直す" : "木を判定する"} <span class="cost">約 ${fmtUsd(usd)}</span></button>` +
+      `<div class="actions"><button class="btn primary" data-judge ${hasKey && state.segments.length ? "" : "disabled"}>${judged ? "全部を判定し直す" : "木を判定する"} <span class="cost">約 ${fmtUsd(usd)}</span></button>` +
         (hasKey
-          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。${photo2 ? `${photoLayerLabel(photo2)}も一緒に見せ、変化を拾います（設定で変えられます）。` : ""}送るのは航空写真の切り抜きだけです。</p>`
+          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。${photo2 ? `${photoLayerLabel(photo2)}も一緒に見せ、変化を拾います（設定で変えられます）。` : ""}送るのは航空写真の切り抜きだけです。${byHuman ? `人が直した ${byHuman} 区切りは上書きしません。` : ""}</p>`
           : `<p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります。</p>`) +
         `</div>`,
     );
-    if (localStorage.getItem(JUDGMENTS_KEY)) parts.push(`<div class="actions"><button class="btn" data-reset-demo>判定を見本に戻す</button></div>`);
+    if (state.centerline.source.kind === "demo" && judged) parts.push(`<div class="actions"><button class="btn" data-reset-demo>判定を見本に戻す</button></div>`);
     parts.push(`<div class="actions"><button class="btn primary" data-go="5">次へ：確かめて直す</button></div>`);
   }
   return parts.join("");
 }
 
-/** 判定を走らせる。窓ごとに 写真を作る → 主のモデル → 確信「低」だけ見直しのモデル。同時に 3 窓まで */
+/**
+ * 判定を走らせる。窓ごとに 写真を作る → 主のモデル → 確信「低」だけ見直しのモデル。同時に 3 窓まで。
+ * 人が直した区切りは飛ばす（人の修正を優先。spec §8.4。Codex の指摘 2026-11-03）。答えに無かった番号は未判定のまま「確かめる所」へ
+ */
 async function runJudging(state: AppState) {
   const key = getApiKey();
   if (!key || state.run) return;
@@ -1063,6 +1632,11 @@ async function runJudging(state: AppState) {
     if (state.run?.cancel) return;
     const label = `${segs[0].fromM}〜${segs.at(-1)!.toM}m`;
     try {
+      const ids = segs.map((s) => s.id).filter((id) => state.judgments.get(id)?.by !== "人");
+      if (!ids.length) {
+        log(`窓 ${k + 1}（${label}）：全部人が直した区切りなので飛ばします`);
+        return;
+      }
       const images = await renderWindow(segs);
       // 別の年の写真（F11）。その年の写真がこの窓に 1 枚もなければ、1 枚だけで判定する
       let second = photo2 ? await renderWindow(segs, photo2) : undefined;
@@ -1070,13 +1644,18 @@ async function runJudging(state: AppState) {
         log(`　窓 ${k + 1}：${photoLayerLabel(photo2)}はこの範囲にないので、最新写真だけで判定します`);
         second = undefined;
       }
-      const main = await judgeWindow(client, model, images, images.ids, second);
+      const main = await judgeWindow(client, model, images, ids, second);
       if (state.run) state.run.usd += main.usd;
       if (main.refused) {
         log(`!窓 ${k + 1}（${label}）：モデルが答えませんでした`);
       } else {
-        for (const j of main.judgments) state.judgments.set(j.segmentId, j);
-        log(`窓 ${k + 1}（${label}）：${main.judgments.length} 区切り、${Math.round(main.seconds)}秒、${fmtUsd(main.usd)}`);
+        for (const j of main.judgments) {
+          state.judgments.set(j.segmentId, j);
+          state.unjudged.delete(j.segmentId);
+        }
+        for (const id of main.missing) if (!state.judgments.has(id)) state.unjudged.add(id);
+        log(`窓 ${k + 1}（${label}）：${main.judgments.length} 区切り${ids.length < segs.length ? `（人が直した ${segs.length - ids.length} は飛ばし）` : ""}、${Math.round(main.seconds)}秒、${fmtUsd(main.usd)}`);
+        if (main.missing.length) log(`!窓 ${k + 1}：答えに無かった番号 ${main.missing.join("・")}（未判定のまま「確かめる所」に入れます）`);
         // 見直すのは確信「低」と、別の年の写真で変化のあった区切り（spec §8.4）
         const lows = main.judgments.filter((j) => j.conf === "低" || isRealChange(j.change)).map((j) => j.segmentId);
         if (review && lows.length && !state.run?.cancel) {
@@ -1110,7 +1689,7 @@ async function runJudging(state: AppState) {
   await Promise.all(workers);
   const total = state.run?.usd ?? 0;
   state.run = null;
-  saveJudgments(state);
+  persist(state);
   if (state.step === 4) renderStep(state);
   console.info(`判定おわり：${fmtUsd(total)}`);
 }
@@ -1122,21 +1701,8 @@ function refreshJudgments(state: AppState) {
   (state.map.getSource("segments") as GeoJSONSource | undefined)?.setData(state.segmentsGeo);
   renderList(state);
   renderChecks(state);
-  saveJudgments(state);
+  persist(state);
   if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
-}
-
-function saveJudgments(state: AppState) {
-  localStorage.setItem(JUDGMENTS_KEY, JSON.stringify([...state.judgments.values()]));
-}
-
-function loadSavedJudgments(): Judgment[] | null {
-  try {
-    const raw = localStorage.getItem(JUDGMENTS_KEY);
-    return raw ? (JSON.parse(raw) as Judgment[]) : null;
-  } catch {
-    return null;
-  }
 }
 
 function countKinds(state: AppState): string {
@@ -1145,12 +1711,12 @@ function countKinds(state: AppState): string {
     const k = state.parcelById.get(h.parcelId)!.properties.kind;
     c.set(k, (c.get(k) ?? 0) + 1);
   }
-  return [...c.entries()].map(([k, n]) => `${kindLabel(k)} ${n}`).join("・");
+  return [...c.entries()].map(([k, n]) => `${kindLabel(k)} ${n}`).join("・") || "なし";
 }
 
-/** 確かめる所＝確信「低」の区切り。起点から順、同じ所は左→右 */
+/** 確かめる所＝確信「低」・森林の食い違い・変化・未判定の区切り。起点から順、同じ所は左→右 */
 function checkList(state: AppState): Check[] {
-  return listChecks(state.segments, state.judgments, state.forestFlags);
+  return listChecks(state.segments, state.judgments, state.forestFlags, state.unjudged);
 }
 
 /** 一覧に出ている確かめる所（絞り込み後）。前へ・次へと一覧の番号はこちらで数える */
@@ -1187,10 +1753,11 @@ function renderChecks(state: AppState) {
       const seg = state.segments.find((s) => s.id === c.segmentId);
       const j = state.judgments.get(c.segmentId);
       const side = c.segmentId.startsWith("L") ? "左" : "右";
-      const tag = c.kind === "森林" ? `<span class="badge forest">森林</span>` : c.kind === "変化" ? `<span class="badge change">変化</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
+      const tag =
+        c.kind === "森林" ? `<span class="badge forest">森林</span>` : c.kind === "変化" ? `<span class="badge change">変化</span>` : c.kind === "未判定" ? `<span class="badge">未判定</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
       return `<tr data-seg="${c.segmentId}" class="${c.segmentId === state.selectedSegment ? "selected" : ""}">
         <td class="num">${i + 1}</td><td class="num">${seg ? `${seg.fromM}〜${seg.toM}` : ""}</td><td>${side}</td>
-        <td class="num">${c.tree}%</td><td>${tag}</td>
+        <td class="num">${treeText(c.tree)}</td><td>${tag}</td>
         <td class="muted" title="${escapeHtml(c.why)}">${escapeHtml(c.why.length > 18 ? c.why.slice(0, 18) + "…" : c.why)}</td>
         <td class="note-cell ${state.notes.get(c.segmentId)?.result === "×" ? "ng" : state.notes.get(c.segmentId)?.result ? "ok" : ""}" title="${escapeHtml(noteText(state.notes.get(c.segmentId)))}">${escapeHtml(state.notes.get(c.segmentId)?.result ?? "")}</td></tr>`;
     })
@@ -1210,8 +1777,11 @@ function renderChecks(state: AppState) {
 function wireMapClicks(state: AppState) {
   const { map } = state;
   map.on("click", (e) => {
-    if (state.placingKp) return placeKp(state, [e.lngLat.lng, e.lngLat.lat]);
-    if (state.placingTilt) return placeTilt(state, [e.lngLat.lng, e.lngLat.lat]);
+    const ll: LonLat = [e.lngLat.lng, e.lngLat.lat];
+    if (state.drawing) return drawPoint(state, ll);
+    if (state.osmPick) return void pickOsm(state, ll);
+    if (state.placingKp) return placeKp(state, ll);
+    if (state.placingTilt) return placeTilt(state, ll);
     // 区切りの上では区切りを優先。筆は、地区外・別図でないものを優先する（地区外の区画は隣の地図の筆を丸ごと覆っているため）
     const seg = map.queryRenderedFeatures(e.point, { layers: ["segments-fill"] })[0];
     if (seg) return selectSegment(state, seg.properties.id as string, false);
@@ -1220,8 +1790,12 @@ function wireMapClicks(state: AppState) {
     if (f) selectParcel(state, f.properties.id as string, false);
   });
   for (const layer of ["segments-fill", "parcels-fill"]) {
-    map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
-    map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
+    map.on("mouseenter", layer, () => {
+      if (!state.drawing && !state.osmPick && !state.placingKp && !state.placingTilt) map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", layer, () => {
+      if (!state.drawing && !state.osmPick && !state.placingKp && !state.placingTilt) map.getCanvas().style.cursor = "";
+    });
   }
 }
 
@@ -1259,7 +1833,7 @@ function kpsGeo(state: AppState): FeatureCollection<Point> {
 
 function refreshKps(state: AppState) {
   (state.map.getSource("kps") as GeoJSONSource | undefined)?.setData(kpsGeo(state));
-  localStorage.setItem(KPS_KEY, JSON.stringify(state.kps));
+  persist(state);
   renderList(state);
   if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
   else if (state.selectedParcel) selectParcel(state, state.selectedParcel, false);
@@ -1268,16 +1842,7 @@ function refreshKps(state: AppState) {
 /** 起点からの距離 m の KP の表示。距離標が足りなければ空 */
 function kpText(state: AppState, m: number): string {
   const est = estimateKp(state.kps, m);
-  return est ? `${escapeHtml(formatKp(state.roadName, est))}<br><span class="muted small">${est.basis}</span>` : `<span class="muted">距離標を 2 本以上置くと出ます（手順 6）</span>`;
-}
-
-function loadJson<T>(key: string): T | null {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : null;
-  } catch {
-    return null;
-  }
+  return est ? `${escapeHtml(formatKp(state.roadName, est))}<br><span class="muted small">${escapeHtml(est.basis)}</span>` : `<span class="muted">距離標を 2 本以上置くと出ます（手順 6）</span>`;
 }
 
 /** 地図の読み込みが終わる前に一覧の行を押すと、源（source）がまだ無くて MapLibre が例外を投げる。そのときは色を付けないだけにする */
@@ -1291,7 +1856,6 @@ function clearSelection(state: AppState) {
   state.selectedParcel = state.selectedSegment = null;
   document.querySelectorAll("table.list tr.selected").forEach((tr) => tr.classList.remove("selected"));
 }
-
 
 /** パネルに隠れていない範囲の真ん中に来るよう、余白を付けて飛ぶ */
 function flyTo(state: AppState, bounds: LngLatBoundsLike) {
@@ -1316,10 +1880,11 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
   row?.scrollIntoView({ block: "nearest" });
   const notLand = NOT_LAND.has(p.properties.kind);
   const tree = h ? treeOfParcel(state, h) : null;
+  // 筆の属性（所在・地番・地図の名前）は案件ファイルから来ることもあるので、全部 escapeHtml する
   openDetail(
     `${p.properties.oaza ?? ""} ${p.properties.chiban}`,
     `<dl class="kv">
-      <dt>種類</dt><dd><span class="badge" style="background:${KIND_COLORS[p.properties.kind]}">${kindLabel(p.properties.kind)}</span> ${help(HELP.kind)}</dd>
+      <dt>種類</dt><dd><span class="badge" style="background:${KIND_COLORS[p.properties.kind] ?? "#eee"}">${escapeHtml(kindLabel(p.properties.kind))}</span> ${help(HELP.kind)}</dd>
       ${notLand ? `<dd style="grid-column:1/-1" class="muted small">土地ではなく「この地図ではここから先は描いていない」という印です。この中の筆は隣の地図に載っています。</dd>` : ""}
       <dt>かかる</dt><dd>${h ? `はい。${h.areaM2} m²` : "いいえ"}</dd>
       ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
@@ -1327,7 +1892,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
       ${h ? `<dt>KP（推定）</dt><dd>${kpText(state, (h.fromM + h.toM) / 2)}</dd>` : ""}
       <dt>外で見る</dt><dd>${earthLink(ringCenter(h ? h.shape.coordinates[0][0] : p.geometry.coordinates[0]))}</dd>
       ${h ? `<dt>森林の区域</dt><dd>${state.forest ? escapeHtml(forestText(state.forest.get(h.parcelId))) + (noticeText(state.forest.get(h.parcelId)) ? `<br><span class="badge low">届出が要るかもしれない（市町村に確かめる）</span>` : "") : `<span class="muted">${escapeHtml(state.forestNote)}</span>`} ${help(HELP.forest)}</dd>` : ""}
-      <dt>地図</dt><dd>${p.properties.map}</dd>
+      <dt>地図</dt><dd>${escapeHtml(p.properties.map)}</dd>
     </dl>
     <p class="muted small" style="margin-top:10px">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p>`,
   );
@@ -1347,8 +1912,9 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
   const j = state.judgments.get(id);
   const side = f.properties!.side === "L" ? "左" : "右";
   const confClass = j?.conf === "低" ? "low" : j?.conf === "高" ? "high" : "";
+  // 判定の値は選択肢で検めてあるが、案件ファイルから来る文字（理由・モデル名・年）は全部 escapeHtml する（Codex の指摘 2026-11-03）
   openDetail(
-    `区切り ${id}`,
+    `区切り ${escapeHtml(id)}`,
     `<dl class="kv">
       <dt>場所</dt><dd>起点から ${f.properties!.fromM}〜${f.properties!.toM} m の${side}</dd>
       <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
@@ -1359,14 +1925,16 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
       ${
         j
           ? `<dt>木の割合</dt><dd><b>${j.tree}%</b></dd>
-             <dt>樹種</dt><dd>${j.kind}</dd>
-             <dt>木以外</dt><dd>${j.other.join("・") || "—"}</dd>
-             <dt>確信</dt><dd><span class="badge ${confClass}">${j.conf}</span></dd>
+             <dt>樹種</dt><dd>${escapeHtml(j.kind)}</dd>
+             <dt>木以外</dt><dd>${escapeHtml(j.other.join("・")) || "—"}</dd>
+             <dt>確信</dt><dd><span class="badge ${confClass}">${escapeHtml(j.conf)}</span></dd>
              <dt>理由</dt><dd>${escapeHtml(j.why)}</dd>
-             <dt>決めたのは</dt><dd><span class="badge ${j.by === "人" ? "human" : ""}">${j.by}${j.model ? `（${shortModel(j.model)}）` : ""}</span></dd>
-             ${j.before ? `<dt>最初の判定</dt><dd class="muted">${j.before.tree}%・確信 ${j.before.conf}（${shortModel(j.before.model ?? "")}）→ 見直しました</dd>` : ""}
-             ${j.oldYear ? `<dt>別の年</dt><dd>${j.oldYear} 年度の写真では ${j.treeOld ?? "?"}%。変化：<b>${j.change ?? "分からない"}</b> ${help(HELP.change)}</dd>` : ""}`
-          : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
+             <dt>決めたのは</dt><dd><span class="badge ${j.by === "人" ? "human" : ""}">${escapeHtml(j.by)}${j.model ? `（${escapeHtml(shortModel(j.model))}）` : ""}</span></dd>
+             ${j.before ? `<dt>最初の判定</dt><dd class="muted">${j.before.tree}%・確信 ${escapeHtml(j.before.conf)}（${escapeHtml(shortModel(j.before.model ?? ""))}）→ 見直しました</dd>` : ""}
+             ${j.oldYear ? `<dt>別の年</dt><dd>${escapeHtml(j.oldYear)} 年度の写真では ${j.treeOld ?? "?"}%。変化：<b>${escapeHtml(j.change ?? "分からない")}</b> ${help(HELP.change)}</dd>` : ""}`
+          : state.unjudged.has(id)
+            ? `<dt>判定</dt><dd class="muted">Claude の答えにこの番号がありませんでした（未判定）。現地で確かめるか、手で直してください</dd>`
+            : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
       }
     </dl>
     <div class="seg-photo" data-seg-photo><span class="muted small">Claude が見た写真を切り出しています…</span></div>
@@ -1397,7 +1965,7 @@ async function showSegmentPhoto(state: AppState, id: string) {
     if (!crop || state.selectedSegment !== id) return;
     const target = document.querySelector<HTMLElement>("[data-seg-photo]");
     if (!target) return;
-    const fig = (data: string, cap: string) => `<figure><img src="data:image/jpeg;base64,${data}" alt="${cap}"><figcaption>${cap}</figcaption></figure>`;
+    const fig = (data: string, cap: string) => `<figure><img src="data:image/jpeg;base64,${data}" alt="${escapeHtml(cap)}"><figcaption>${escapeHtml(cap)}</figcaption></figure>`;
     target.innerHTML = `<div class="seg-photo-pair">${fig(crop.plain, "札なし")}${fig(crop.labeled, "札あり（枠と番号）")}${old ? fig(old.plain, `${oldYear} 年度`) : ""}</div><p class="muted small">Claude に送ったのと同じ描き方（地理院の航空写真、z18 を 3 倍）。この区切りの周り 25m を切り出したもの。出典：国土地理院（地理院タイル）を加工</p>`;
   } catch {
     box.innerHTML = `<span class="muted small">写真を切り出せませんでした</span>`;
@@ -1407,9 +1975,6 @@ async function showSegmentPhoto(state: AppState, id: string) {
 const TREE_KINDS: TreeKind[] = ["針葉樹", "広葉樹", "混じる", "分からない", "なし"];
 const CONFS: Confidence[] = ["高", "中", "低"];
 
-/** 区切りの判定を人が直すフォーム（F10）。開いたときは今の値が入っている。
- * 確信だけは「高」を初期値にする：人が目で確かめて記録するのだから、Claude の「低」を引き継ぐと「確かめる所」に残り続けるため */
-/** 現地の記録の欄（持ち運びモード）。○△× は押すだけで保存、メモは入力を離れたとき（blur）に保存。現地で片手で使えるように */
 /**
  * 指で触る画面（iPad・スマホ）なら現地の記録を、マウスの画面（PC）なら直す欄を開いておく。
  * 2 つの欄のどちらに入れるか最初に迷う、と言われた（2026-11-03）。使う場面（現地か机か）で開く欄を変え、文でも案内する
@@ -1418,10 +1983,11 @@ function touchFirst(): boolean {
   return window.matchMedia("(pointer: coarse)").matches;
 }
 
+/** 現地の記録の欄（持ち運びモード）。○△× は押すだけで保存、メモは入力を離れたとき（blur）に保存。現地で片手で使えるように */
 function noteForm(n: FieldNote | undefined, open: boolean): string {
   const has = !!(n && (n.result || n.memo));
   return `<details class="note" data-note ${open || has ? "open" : ""}>
-    <summary class="note-head">現地の記録 ${help(HELP.notes)}${has ? `<span class="badge">${n!.result || "メモ"}</span>` : ""}${n?.at ? `<span class="muted small"> ${new Date(n.at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>` : ""}</summary>
+    <summary class="note-head">現地の記録 ${help(HELP.notes)}${has ? `<span class="badge">${escapeHtml(n!.result || "メモ")}</span>` : ""}${n?.at ? `<span class="muted small"> ${new Date(n.at).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>` : ""}</summary>
     <div class="note-btns">${NOTE_RESULTS.map((r) => `<button type="button" class="btn ${n?.result === r.value ? "primary" : ""}" data-note-result="${r.value}" title="${r.label}">${r.value} ${r.label}</button>`).join("")}</div>
     <input data-note-memo value="${escapeHtml(n?.memo ?? "")}" placeholder="メモ（電線あり、もう切られている、など）">
     ${has ? `<div class="row end"><button type="button" class="btn small" data-note-clear>この記録を消す</button></div>` : ""}
@@ -1463,13 +2029,11 @@ function wireNoteForm(state: AppState, id: string) {
 }
 
 function saveNotes(state: AppState) {
-  try {
-    localStorage.setItem(NOTES_KEY, JSON.stringify(pruneNotes(state.notes)));
-  } catch {
-    /* 残せなくても画面は動く */
-  }
+  persist(state);
 }
 
+/** 区切りの判定を人が直すフォーム（F10）。開いたときは今の値が入っている。
+ * 確信だけは「高」を初期値にする：人が目で確かめて記録するのだから、Claude の「低」を引き継ぐと「確かめる所」に残り続けるため */
 function fixForm(j: Judgment | undefined, open: boolean): string {
   const tree = j?.tree ?? 0;
   return `<details class="fix" ${open || j?.by === "人" ? "open" : ""}>
@@ -1496,18 +2060,21 @@ function wireFixForm(state: AppState, id: string) {
     e.preventDefault();
     const fd = new FormData(form);
     const old = state.judgments.get(id);
+    const kind = String(fd.get("kind"));
+    const conf = String(fd.get("conf"));
     const fixed: Judgment = {
       segmentId: id,
       tree: Number(fd.get("tree")),
-      kind: fd.get("kind") as TreeKind,
+      kind: (TREE_KINDS as string[]).includes(kind) ? (kind as TreeKind) : "なし",
       other: old?.other ?? [],
-      conf: fd.get("conf") as Confidence,
+      conf: (CONFS as string[]).includes(conf) ? (conf as Confidence) : "高",
       why: String(fd.get("why") ?? "").trim() || "人が直した",
       by: "人",
       // 直す前の判定は 1 つだけ覚える（人が何度直しても、戻る先は Claude の判定）
       prev: old ? (old.by === "人" && old.prev ? old.prev : stripPrev(old)) : undefined,
     };
     state.judgments.set(id, fixed);
+    state.unjudged.delete(id);
     refreshJudgments(state);
     renderChecks(state);
     if (state.step === 5) renderStep(state);
@@ -1577,7 +2144,7 @@ function renderList(state: AppState) {
   });
   document.getElementById("hit-shown")!.textContent = shown.length !== state.hits.length ? `${shown.length} / ${state.hits.length} 筆` : "";
   if (!shown.length) {
-    document.getElementById("list-body")!.innerHTML = `<p class="empty">${state.hits.length ? "この絞り込みに合う筆はありません。" : "かかる筆がありません。"}</p>`;
+    document.getElementById("list-body")!.innerHTML = `<p class="empty">${state.hits.length ? "この絞り込みに合う筆はありません。" : state.parcels.length ? "かかる筆がありません。" : "公図がまだありません。手順 2 で取得するか、落としてください。"}</p>`;
     return;
   }
   const rows = shown
@@ -1605,11 +2172,13 @@ function renderList(state: AppState) {
 
 /** 区間の周り（左右 300m ほど）のタイルを読み、かかる筆ごとの重なりを出す。失敗しても道具は動く（列が空になるだけ） */
 async function loadForest(state: AppState) {
-  const lls = state.dense.filter((_, i) => i % 20 === 0).map((p) => toLonLat(p));
+  const dense = state.dense;
+  const lls = dense.filter((_, i) => i % 20 === 0).map((p) => toLonLat(p));
   const pad = 0.004; // 経度・緯度で約 300〜400m
   const bbox: [number, number, number, number] = [Math.min(...lls.map((c) => c[0])) - pad, Math.min(...lls.map((c) => c[1])) - pad, Math.max(...lls.map((c) => c[0])) + pad, Math.max(...lls.map((c) => c[1])) + pad];
   try {
     const r = await fetchForest(bbox);
+    if (state.dense !== dense) return; // 読んでいる間に中心線が変わった
     state.forestIndex = new ForestIndex(r.polygons);
     recomputeForest(state);
     // 点線（確かめる所）に食い違いを反映する
@@ -1619,6 +2188,7 @@ async function loadForest(state: AppState) {
     state.forestNote = r.failed ? `森林の区域：タイル ${r.tiles} 枚のうち ${r.failed} 枚を読めませんでした` : `森林の区域：林野庁（データ時点 ${asOf}）`;
     console.info(`${state.forestNote}。多角形 ${r.polygons.length}`);
   } catch (e) {
+    if (state.dense !== dense) return;
     state.forestNote = `森林の区域を読めませんでした：${(e as Error).message}`;
   }
   renderList(state);
@@ -1658,6 +2228,7 @@ function forestSummary(state: AppState): string {
 function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
   const vehicleZones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones : [];
   const band = state.track.source.kind === "band";
+  const demo = !state.parcelSource.fromFile && state.centerline.source.kind === "demo";
   return {
     title: document.getElementById("project-name")?.textContent ?? state.roadName,
     roadName: state.roadName,
@@ -1676,6 +2247,8 @@ function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
     forest: state.forest,
     forestFlags: state.forestFlags,
     notes: state.notes,
+    unjudged: state.unjudged,
+    mojAttribution: mojAttribution(state.parcelSource.fromFile ? { fileName: "", maps: state.parcelSource.maps, skipped: [], features: [] } : null, demo),
   };
 }
 
@@ -1690,9 +2263,10 @@ async function exportWalkMap(state: AppState, withPhoto: boolean) {
       if (state.step === 7) renderStep(state);
     });
     const day = new Date().toISOString().slice(0, 10);
+    const stem = (state.roadName || state.name).replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 30) || "案件";
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `arukumae_${state.roadName}_持って歩く地図_${day}.pdf`;
+    a.download = `arukumae_${stem}_持って歩く地図_${day}.pdf`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     console.info(`PDF ${Math.round(blob.size / 1024)} KB`);

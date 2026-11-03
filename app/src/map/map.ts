@@ -9,7 +9,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // MapLibre 6 は自分のファイルの隣から Worker を読もうとするが、Vite が束ねると隣にない。
 // scripts/copy-worker.mjs が public/vendor/ に写したものを、手を入れない形で読む
 maplibregl.setWorkerUrl(`${import.meta.env.BASE_URL}vendor/maplibre-gl-worker.mjs`);
-import type { FeatureCollection, LineString, Point, Polygon } from "geojson";
+import type { FeatureCollection, LineString, Point, Polygon, Position } from "geojson";
 import type { FeatureCollection as FC, MultiPolygon } from "geojson";
 import { LATEST, photoTileTemplate, type PhotoLayer } from "../core/photo";
 import { NOT_LAND, type Judgment, type ParcelKind } from "../core/types";
@@ -38,14 +38,31 @@ export const LAYER_IDS = {
 
 export type LayerGroup = keyof typeof LAYER_IDS;
 
-const ATTRIBUTION =
-  '出典：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院（地理院タイル 全国最新写真・年度別写真）</a>を加工（2023 年度の一部は Landsat-8 と GRUS画像（© Axelspace）） ｜ ' +
-  '<a href="https://www.geospatial.jp/ckan/dataset/houmusyouchizu-2026-1-995" target="_blank">登記所備付地図データ 上水内郡小川村（法務省）</a>を加工 ｜ ' +
-  '<a href="https://www.geospatial.jp/ckan/dataset/layer" target="_blank">森林計画対象森林レイヤ（林野庁）</a> ｜ ' +
-  '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>';
+/** 公図の出典は案件ごとに変わる（市町村・データセット）。見本は小川村 */
+export const DEMO_MOJ = { text: "登記所備付地図データ 上水内郡小川村（法務省）", url: "https://www.geospatial.jp/ckan/dataset/houmusyouchizu-2026-1-995" };
+
+function attributionHtml(moj: { text: string; url: string | null }): string {
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const mojHtml = moj.url ? `<a href="${esc(moj.url)}" target="_blank">${esc(moj.text)}</a>` : esc(moj.text);
+  return (
+    '出典：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院（地理院タイル 全国最新写真・年度別写真）</a>を加工（2023 年度の一部は Landsat-8 と GRUS画像（© Axelspace）） ｜ ' +
+    `${mojHtml}を加工 ｜ ` +
+    '<a href="https://www.geospatial.jp/ckan/dataset/layer" target="_blank">森林計画対象森林レイヤ（林野庁）</a> ｜ ' +
+    '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>'
+  );
+}
+
+let attribution: maplibregl.AttributionControl | null = null;
+
+/** 出典の表記を付け替える（公図の市町村が変わったとき）。MapLibre の AttributionControl は作り直すしかない */
+export function setAttribution(map: MlMap, moj: { text: string; url: string | null }) {
+  if (attribution) map.removeControl(attribution);
+  attribution = new maplibregl.AttributionControl({ compact: true, customAttribution: attributionHtml(moj) });
+  map.addControl(attribution, "bottom-right");
+}
 
 export function createMap(container: HTMLElement, center: [number, number]): MlMap {
-  return new maplibregl.Map({
+  const map = new maplibregl.Map({
     container,
     center,
     zoom: 16,
@@ -105,8 +122,9 @@ export function createMap(container: HTMLElement, center: [number, number]): MlM
     .addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right")
     .addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-right")
     // 現在地。現地で iPad を持って歩くとき、いまどの区切りの前にいるかを見るため（位置の情報は端末の中だけ）
-    .addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showAccuracyCircle: true }), "top-right")
-    .addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), "bottom-right");
+    .addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showAccuracyCircle: true }), "top-right");
+  setAttribution(map, DEMO_MOJ);
+  return map;
 }
 
 /** 写真の年を切り替える。null なら全国最新写真だけ */
@@ -130,20 +148,31 @@ export function treeColorExpression(): ExpressionSpecification {
   ];
 }
 
-export function addSection(map: MlMap, section: FeatureCollection<LineString>) {
-  map.addSource("section", { type: "geojson", data: section });
-  map.addLayer({ id: "section-line", type: "line", source: "section", paint: { "line-color": "#ff3b30", "line-width": 2.5 } });
-  const coords = section.features[0].geometry.coordinates;
-  map.addSource("section-ends", {
-    type: "geojson",
-    data: {
+function sectionGeo(coords: Position[]): { line: FeatureCollection<LineString>; ends: FeatureCollection<Point> } {
+  return {
+    line: { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } }] },
+    ends: {
       type: "FeatureCollection",
       features: [
         { type: "Feature", properties: { label: "起点 0m" }, geometry: { type: "Point", coordinates: coords[0] } },
         { type: "Feature", properties: { label: "終点" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } },
       ],
     },
-  });
+  };
+}
+
+/** 中心線を差し替える（案件を切り替えた・中心線を決め直したとき） */
+export function setSection(map: MlMap, coords: Position[]) {
+  const g = sectionGeo(coords);
+  setSourceData(map, "section", g.line);
+  setSourceData(map, "section-ends", g.ends);
+}
+
+export function addSection(map: MlMap, coords: Position[]) {
+  const g = sectionGeo(coords);
+  map.addSource("section", { type: "geojson", data: g.line });
+  map.addLayer({ id: "section-line", type: "line", source: "section", paint: { "line-color": "#ff3b30", "line-width": 2.5 } });
+  map.addSource("section-ends", { type: "geojson", data: g.ends });
   map.addLayer({
     id: "section-ends",
     type: "symbol",
@@ -306,6 +335,31 @@ export function addKps(map: MlMap, kps: FeatureCollection<Point>) {
     layout: { "text-field": ["get", "label"], "text-size": 12, "text-offset": [0, -1.4], "text-font": ["NotoSansCJKjp-Bold"], "text-allow-overlap": true },
     paint: { "text-color": "#c62828", "text-halo-color": "#fff", "text-halo-width": 2 },
   });
+}
+
+/**
+ * 下書き（手で描いている中心線、OSM でたどった道の候補、起点・終点の印）。中心線（赤）と見分けるため青緑にする。
+ * 決めたら中心線（section）に移し、ここは空にする
+ */
+export function addDraft(map: MlMap) {
+  const empty: FeatureCollection = { type: "FeatureCollection", features: [] };
+  map.addSource("draft", { type: "geojson", data: empty });
+  map.addLayer({ id: "draft-line", type: "line", source: "draft", filter: ["==", ["geometry-type"], "LineString"], paint: { "line-color": "#00bfa5", "line-width": 4, "line-dasharray": [2, 1] } });
+  map.addLayer({ id: "draft-point", type: "circle", source: "draft", filter: ["==", ["geometry-type"], "Point"], paint: { "circle-radius": 6, "circle-color": "#00bfa5", "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
+  map.addLayer({
+    id: "draft-label",
+    type: "symbol",
+    source: "draft",
+    filter: ["==", ["geometry-type"], "Point"],
+    layout: { "text-field": ["get", "label"], "text-size": 12, "text-offset": [0, -1.3], "text-font": ["NotoSansCJKjp-Bold"], "text-allow-overlap": true },
+    paint: { "text-color": "#00695c", "text-halo-color": "#fff", "text-halo-width": 2 },
+  });
+}
+
+export function setDraft(map: MlMap, line: Position[] | null, points: { coords: Position; label: string }[]) {
+  const features: FeatureCollection["features"] = points.map((p) => ({ type: "Feature", properties: { label: p.label }, geometry: { type: "Point", coordinates: p.coords } }));
+  if (line && line.length >= 2) features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
+  setSourceData(map, "draft", { type: "FeatureCollection", features });
 }
 
 export function setGroupVisible(map: MlMap, group: LayerGroup, visible: boolean) {

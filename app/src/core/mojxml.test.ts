@@ -118,6 +118,54 @@ describe("地図XML を読む", () => {
     expect(cutParcels(m, dense, 50).map((f) => f.properties.chiban)).toEqual(["4202", "4203-1"]);
   });
 
+  it("中心線を包む大きな筆は、外周が 200m より遠くても残す（Codex の指摘 2026-11-03）", () => {
+    const N = 71600;
+    const E = -45400;
+    // 区間（N 71600〜71700）を丸ごと包む 1km 四方の筆。外周はどこも中心線から 400m 以上
+    const big = sampleXml().replace(
+      "</主題属性>",
+      `<筆 id="H9"><大字名>大字稲丘</大字名><地番>9999</地番><形状 idref="F9"/></筆></主題属性>`,
+    ).replace(
+      "</空間属性>",
+      `<zmn:GM_Curve id="C90"><zmn:GM_Curve.segment><zmn:GM_LineString><zmn:GM_LineString.controlPoint>` +
+        [[N - 450, E - 500], [N - 450, E + 500], [N + 550, E + 500], [N + 550, E - 500], [N - 450, E - 500]]
+          .map(([n, e]) => `<zmn:GM_PointArray.column><zmn:GM_Position.direct><zmn:X>${n}</zmn:X><zmn:Y>${e}</zmn:Y></zmn:GM_Position.direct></zmn:GM_PointArray.column>`)
+          .join("") +
+        `</zmn:GM_LineString.controlPoint></zmn:GM_LineString></zmn:GM_Curve.segment></zmn:GM_Curve>` +
+        `<zmn:GM_Surface id="F9"><zmn:GM_Surface.patch><zmn:GM_Polygon><zmn:GM_Polygon.boundary><zmn:GM_SurfaceBoundary><zmn:GM_SurfaceBoundary.exterior><zmn:GM_Ring><zmn:GM_CompositeCurve.generator idref="C90"/></zmn:GM_Ring></zmn:GM_SurfaceBoundary.exterior></zmn:GM_SurfaceBoundary></zmn:GM_Polygon.boundary></zmn:GM_Polygon></zmn:GM_Surface.patch></zmn:GM_Surface></空間属性>`,
+    );
+    const m = parseMojxml(big, "20588-1000-99.xml");
+    const dense = resample([[-45400, 71600], [-45400, 71700]] as EN[], 1);
+    expect(cutParcels(m, dense, 200).map((f) => f.properties.chiban)).toEqual(["4202", "4203-1", "道-1", "9999"]);
+    // 包んでいない大きな筆（区間の東 1km）は落ちる
+    const far = big.replace(/<zmn:Y>(-?\d+)<\/zmn:Y>/g, (_, y) => `<zmn:Y>${Number(y) + 2000}</zmn:Y>`);
+    expect(cutParcels(parseMojxml(far, "20588-1000-99.xml"), dense, 200)).toEqual([]);
+  });
+
+  it("地図の系が案件の系と違えば、換算して比べる。緯度経度は地図の系で出す", async () => {
+    const { toPlaneZone, toLonLatZone } = await import("./proj");
+    // 第VIII系の試しの地図を、第X系の座標で書き直す（同じ場所）
+    const toX = (n: number, e: number) => {
+      const [e2, n2] = toPlaneZone(10, toLonLatZone(8, [e, n]));
+      return [n2, e2];
+    };
+    const src = sampleXml("公共座標10系").replace(/<zmn:X>(-?[\d.]+)<\/zmn:X><zmn:Y>(-?[\d.]+)<\/zmn:Y>/g, (_, x, y) => {
+      const [n2, e2] = toX(Number(x), Number(y));
+      return `<zmn:X>${n2}</zmn:X><zmn:Y>${e2}</zmn:Y>`;
+    });
+    const m = parseMojxml(src, "20588-1000-99.xml");
+    expect(m.zone).toBe(10);
+    const dense = resample([[-45400, 71600], [-45400, 71700]] as EN[], 1); // 案件は第VIII系
+    const feats = cutParcels(m, dense, 200, undefined, undefined, 8);
+    expect(feats.map((f) => f.properties.chiban)).toEqual(["4202", "4203-1", "道-1"]);
+    const same = cutParcels(parseMojxml(sampleXml(), "20588-1000-99.xml"), dense, 200);
+    // 同じ場所なので緯度経度が 1mm 以内で合う
+    const [lon, lat] = feats[0].geometry.coordinates[0][0];
+    const [lon0, lat0] = same[0].geometry.coordinates[0][0];
+    expect(Math.abs(lon - lon0)).toBeLessThan(2e-8);
+    expect(Math.abs(lat - lat0)).toBeLessThan(2e-8);
+  });
+
   it("地図XML でない XML（KML など）は recognized が false。zip の読み手では地図に数えない", () => {
     const m = parseMojxml("<kml><Document><Placemark/></Document></kml>", "route.kml");
     expect(m.recognized).toBe(false);

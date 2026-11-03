@@ -89,40 +89,44 @@ export function findHits(parcels: ParcelFeature[], segs: Segment[]): ParcelHit[]
       pieces.push(inter);
     }
     if (area > 0) {
+      // 筆の「かかる面積」は欠片を 1 つに合わせた形で測る。つづら折りでは区切り同士が重なり、区切りごとの面積を足すと二重に数える
+      // （見本で 39 筆、合計 42,239 → 39,981 m²。Codex の指摘 2026-11-03）。区切りごとの面積（segAreas）は木の面積の重みに使うのでそのまま
+      const merged = mergePieces(pieces);
+      const unionArea = merged ? planeArea(merged) : area;
       hits.push({
         parcelId: f.properties.id,
-        areaM2: Math.round(area * 10) / 10,
+        areaM2: Math.round(Math.min(area, unionArea) * 10) / 10,
         fromM,
         toM,
         sides: [...sides].sort() as ("L" | "R")[],
         segmentIds,
         segAreas,
-        shape: toLonLatShape(pieces),
+        shape: toLonLatShape(merged, pieces),
       });
     }
   }
   return hits.sort((a, b) => a.fromM - b.fromM);
 }
 
-/** 重なった欠片を1つの形（MultiPolygon、緯度経度）にする。隣の区切り同士の境目の線を消すため、合わせられるなら合わせる */
-function toLonLatShape(pieces: Feature<Polygon | MultiPolygon>[]): MultiPolygon {
-  let merged: Feature<Polygon | MultiPolygon> | null = null;
-  if (pieces.length > 1) {
-    try {
-      merged = turf.union(turf.featureCollection(pieces));
-    } catch {
-      merged = null; // 合わせられない形なら欠片のまま出す。見た目に境目が残るだけで、面積や一覧には影響しない
-    }
-  } else {
-    merged = pieces[0];
+/** 重なった欠片を 1 つの形（平面座標）に合わせる。合わせられない形なら null（欠片のまま使う） */
+function mergePieces(pieces: Feature<Polygon | MultiPolygon>[]): Feature<Polygon | MultiPolygon> | null {
+  if (pieces.length === 1) return pieces[0];
+  try {
+    return turf.union(turf.featureCollection(pieces));
+  } catch {
+    return null;
   }
+}
+
+/** 合わせた形（または欠片）を MultiPolygon（緯度経度）にする。隣の区切り同士の境目の線を消すため、合わせられるなら合わせたものを使う */
+function toLonLatShape(merged: Feature<Polygon | MultiPolygon> | null, pieces: Feature<Polygon | MultiPolygon>[]): MultiPolygon {
   const polys: Position[][][] = [];
   const push = (f: Feature<Polygon | MultiPolygon>) => {
     if (f.geometry.type === "Polygon") polys.push(f.geometry.coordinates);
     else polys.push(...f.geometry.coordinates);
   };
   if (merged) push(merged);
-  else pieces.forEach(push);
+  else pieces.forEach(push); // 合わせられない形なら欠片のまま出す。見た目に境目が残るだけ
   return {
     type: "MultiPolygon",
     coordinates: polys.map((rings) => rings.map((ring) => ring.map((c) => toLonLat([c[0], c[1]])))),

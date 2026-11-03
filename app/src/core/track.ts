@@ -17,8 +17,21 @@ export type LonLat = [number, number];
 
 /* ---------- 読む ---------- */
 
+/** 名前つきの線（KML の Placemark の名前、GeoJSON の properties.name）。中心線を選ぶとき（F12）に名前で見分けるため */
+export interface NamedLine {
+  name: string;
+  coords: LonLat[];
+  /** 多角形の縁（閉じた輪）か */
+  ring: boolean;
+}
+
 /** KML か GeoJSON の文字列から、線と多角形の縁（緯度経度の点列）を全部取り出す。点（Point）は使わない */
 export function parseTrackFile(name: string, text: string): LonLat[][] {
+  return parseNamedLines(name, text).map((l) => l.coords);
+}
+
+/** 同じく、名前つきで */
+export function parseNamedLines(name: string, text: string): NamedLine[] {
   const trimmed = text.trimStart();
   if (trimmed.startsWith("PK")) throw new Error(`${name} は zip（KMZ）のようです。parseTrackBytes で読んでください`);
   if (trimmed.startsWith("{")) return linesFromGeoJSON(JSON.parse(text));
@@ -31,42 +44,51 @@ export function parseTrackFile(name: string, text: string): LonLat[][] {
  * 中の画像などは使わない
  */
 export function parseTrackBytes(name: string, bytes: Uint8Array): LonLat[][] {
+  return parseNamedBytes(name, bytes).map((l) => l.coords);
+}
+
+export function parseNamedBytes(name: string, bytes: Uint8Array): NamedLine[] {
   const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
-  if (!isZip) return parseTrackFile(name, new TextDecoder("utf-8").decode(bytes));
+  if (!isZip) return parseNamedLines(name, new TextDecoder("utf-8").decode(bytes));
   const entries = unzipSync(bytes, { filter: (f) => f.name.toLowerCase().endsWith(".kml") });
   const names = Object.keys(entries).sort((a, b) => (a.toLowerCase() === "doc.kml" ? -1 : b.toLowerCase() === "doc.kml" ? 1 : a.localeCompare(b)));
   if (!names.length) throw new Error(`${name} の中に KML がありません`);
-  return parseTrackFile(names[0], strFromU8(entries[names[0]]));
+  return parseNamedLines(names[0], strFromU8(entries[names[0]]));
 }
 
-function linesFromKml(xml: string): LonLat[][] {
+function unescapeXml(s: string): string {
+  return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&(amp|lt|gt|quot|apos);/g, (_, k) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" })[k as string] ?? "");
+}
+
+function linesFromKml(xml: string): NamedLine[] {
   // DOMParser はテストの環境（Node）にないので、正規表現で拾う。
   // Placemark ごとに見て、この道具が書き出した「伐採範囲の外側」は飛ばす（掃く範囲に余裕幅と伐採の幅を二重に足さないため）。
   // 中身は LineString と LinearRing（多角形の縁）の <coordinates>。"経度,緯度[,高さ]" を空白で区切ったもの
-  const out: LonLat[][] = [];
+  const out: NamedLine[] = [];
   const blocks = xml.match(/<Placemark\b[\s\S]*?<\/Placemark>/g) ?? [xml];
   for (const block of blocks) {
-    const name = /<name>([\s\S]*?)<\/name>/.exec(block)?.[1] ?? "";
+    const name = unescapeXml(/<name>([\s\S]*?)<\/name>/.exec(block)?.[1] ?? "").trim();
     if (name.includes("伐採範囲")) continue;
-    const re = /<(?:LineString|LinearRing)\b[^>]*>[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>/g;
+    const re = /<(LineString|LinearRing)\b[^>]*>[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(block))) {
       const pts: LonLat[] = [];
-      for (const tok of m[1].trim().split(/\s+/)) {
+      for (const tok of m[2].trim().split(/\s+/)) {
         const [lon, lat] = tok.split(",").map(Number);
         if (Number.isFinite(lon) && Number.isFinite(lat)) pts.push([lon, lat]);
       }
-      if (pts.length >= 2) out.push(pts);
+      if (pts.length >= 2) out.push({ name, coords: pts, ring: m[1] === "LinearRing" });
     }
   }
   return out;
 }
 
-function linesFromGeoJSON(json: unknown): LonLat[][] {
-  const out: LonLat[][] = [];
-  const push = (coords: Position[]) => {
+function linesFromGeoJSON(json: unknown): NamedLine[] {
+  const out: NamedLine[] = [];
+  let current = "";
+  const push = (coords: Position[], ring = false) => {
     const pts = coords.filter((c) => Number.isFinite(c[0]) && Number.isFinite(c[1])).map((c) => [c[0], c[1]] as LonLat);
-    if (pts.length >= 2) out.push(pts);
+    if (pts.length >= 2) out.push({ name: current, coords: pts, ring });
   };
   const walkGeom = (g: { type: string; coordinates?: unknown; geometries?: unknown[] } | null | undefined) => {
     if (!g) return;
@@ -75,22 +97,32 @@ function linesFromGeoJSON(json: unknown): LonLat[][] {
         push(g.coordinates as Position[]);
         break;
       case "MultiLineString":
+        (g.coordinates as Position[][]).forEach((l) => push(l));
+        break;
       case "Polygon":
-        (g.coordinates as Position[][]).forEach(push);
+        (g.coordinates as Position[][]).forEach((r) => push(r, true));
         break;
       case "MultiPolygon":
-        (g.coordinates as Position[][][]).forEach((poly) => poly.forEach(push));
+        (g.coordinates as Position[][][]).forEach((poly) => poly.forEach((r) => push(r, true)));
         break;
       case "GeometryCollection":
         (g.geometries as typeof g[]).forEach(walkGeom);
         break;
     }
   };
-  const j = json as { type?: string; features?: { geometry?: unknown; properties?: { kind?: string } | null }[]; geometry?: unknown };
+  const j = json as { type?: string; features?: { geometry?: unknown; properties?: { kind?: string; name?: unknown } | null }[]; geometry?: unknown; properties?: { name?: unknown } | null };
+  const nameOf = (p: { name?: unknown } | null | undefined) => (typeof p?.name === "string" ? p.name : "");
   // この道具が書き出した「伐採範囲の外側」（kind: cut）は飛ばす。KML と同じ理由
-  if (j.type === "FeatureCollection") j.features?.filter((f) => f.properties?.kind !== "cut").forEach((f) => walkGeom(f.geometry as Parameters<typeof walkGeom>[0]));
-  else if (j.type === "Feature") walkGeom(j.geometry as Parameters<typeof walkGeom>[0]);
-  else walkGeom(j as Parameters<typeof walkGeom>[0]);
+  if (j.type === "FeatureCollection") {
+    for (const f of j.features ?? []) {
+      if (f.properties?.kind === "cut") continue;
+      current = nameOf(f.properties);
+      walkGeom(f.geometry as Parameters<typeof walkGeom>[0]);
+    }
+  } else if (j.type === "Feature") {
+    current = nameOf(j.properties);
+    walkGeom(j.geometry as Parameters<typeof walkGeom>[0]);
+  } else walkGeom(j as Parameters<typeof walkGeom>[0]);
   return out;
 }
 
