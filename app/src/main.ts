@@ -539,10 +539,11 @@ function renderStep(state: AppState) {
     case 3: {
       const kinds = countKinds(state);
       if (!state.parcels.length) parts.push(`<p class="err">公図がまだありません。手順 2 で公図を取得するか、地図XML の zip を落としてください。</p>`);
-      parts.push(`<p><b>${state.hits.length} 筆</b>が伐採範囲 ${help(HELP.band)} にかかります（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。右の一覧の行を押すと、地図がそこへ飛びます。</p>`);
+      parts.push(tiles([{ label: "かかる筆", value: state.hits.length, unit: "筆" }, { label: "うち民有林の区域", value: state.forest ? forestCount(state).minyu : "…", unit: state.forest ? "筆" : "", tone: "ok" }, { label: "区切り", value: state.segments.length }]));
+      parts.push(`<p>伐採範囲 ${help(HELP.band)} にかかる筆（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。右の一覧の行を押すと、地図がそこへ飛びます。</p>`);
       parts.push(`<p>${forestSummary(state)} ${help(HELP.forest)}</p>`);
       parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。「地区外」「別図」は隣の地図を指す印なので数えていません。</div>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-go="4">次へ：木を判定する</button></div>`);
+      parts.push(`<div class="actions"><button class="btn primary next" data-go="4">次へ：木を判定する</button></div>`);
       showListTab("hits");
       break;
     }
@@ -555,7 +556,9 @@ function renderStep(state: AppState) {
       const forestN = lows.filter((c) => c.kind === "森林").length;
       const changeN = lows.filter((c) => c.kind === "変化").length;
       const noneN = lows.filter((c) => c.kind === "未判定").length;
-      parts.push(`<p>確かめる所 ${help(HELP.check)}：<b>${lows.length}</b>（確信が低い ${lows.length - forestN - changeN - noneN}・森林の区域と食い違う ${forestN}${changeN ? `・別の年の写真と比べて変化 ${changeN} ${help(HELP.change)}` : ""}${noneN ? `・未判定 ${noneN}` : ""}）。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
+      const seen = countNotes(state.notes, lows.map((l) => l.segmentId));
+      parts.push(tiles([{ label: "確かめる所", value: lows.length, tone: "warn" }, { label: "現地で見た", value: seen.checksDone, unit: `/ ${lows.length}` }, { label: "現地 ×", value: seen.byResult["×"], tone: seen.byResult["×"] ? "warn" : undefined }]));
+      parts.push(`<p>確かめる所 ${help(HELP.check)} の内訳：確信が低い ${lows.length - forestN - changeN - noneN}・森林の区域と食い違う ${forestN}${changeN ? `・別の年の写真と比べて変化 ${changeN} ${help(HELP.change)}` : ""}${noneN ? `・未判定 ${noneN}` : ""}。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
       // 前へ・次へは、一覧で絞り込んだ中を回る。現地で「まだ見ていない所」だけを順に回れるように
       const vis = visibleChecks(state);
       const narrowed = vis.length !== lows.length ? `（絞り込み ${help(HELP.filter)}）` : "";
@@ -566,7 +569,7 @@ function renderStep(state: AppState) {
         parts.push(`<p class="small">現地の記録 ${help(HELP.notes)}：確かめる所 ${lows.length} のうち <b>${c.checksDone}</b> を見た（○ ${c.byResult["○"]}・△ ${c.byResult["△"]}・× ${c.byResult["×"]}。ほかの区切りも含めて ${c.total} 件）。${c.byResult["×"] ? "× の区切りは「この区切りを直す」で判定を直してください。" : ""}</p>`);
         if (c.total) parts.push(`<div class="row btns"><button class="btn small" data-clear-notes>現地の記録を全部消す</button></div>`);
       }
-      parts.push(`<div class="actions"><button class="btn primary" data-go="6">次へ：KP</button></div>`);
+      parts.push(`<div class="actions"><button class="btn primary next" data-go="6">次へ：KP</button></div>`);
       showListTab("checks");
       break;
     }
@@ -593,13 +596,14 @@ function renderStep(state: AppState) {
         parts.push(`<div class="next">あと 1 本置くと、補間できます。</div>`);
       }
       parts.push(`<p class="muted small">ストリートビューは人が見て読むだけにしています（画像を取り込んだり Claude に読ませたりはしません）。距離標と実際の距離は改築などでずれていることがあります。</p>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-go="7">次へ：書き出し</button></div>`);
+      parts.push(`<div class="actions"><button class="btn next" data-go="7">次へ：書き出し</button></div>`);
       break;
     }
     case 7: {
       const noKp = state.kps.length < 2;
       const judged = state.judgments.size;
-      parts.push(`<p>かかる筆 <b>${state.hits.length}</b> 行の一覧表です。${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りが ${state.segments.length - judged} あり、その分の木の面積は数えません。` : ""}</p>`);
+      parts.push(tiles([{ label: "一覧表の行（筆）", value: state.hits.length }, { label: "判定のない区切り", value: state.segments.length - judged, tone: judged < state.segments.length ? "warn" : "ok" }, { label: "距離標", value: state.kps.length, unit: "本", tone: noKp ? "warn" : "ok" }]));
+      parts.push(`<p>${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : "全部の行に KP（推定）が付きます。"}${judged < state.segments.length ? `判定のない区切りの分の木の面積は数えません。` : ""}</p>`);
       parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button></div>`);
       parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・現地の記録・決めたのは・森林の区域・伐採の届出の目印・備考。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`);
       parts.push(`<h4 class="muted small" style="margin:12px 0 4px">公図を買うリスト ${help(HELP.buylist)}</h4>`);
@@ -611,7 +615,7 @@ function renderStep(state: AppState) {
       if (state.pdfRun) {
         parts.push(`<div class="progress"><i style="width:${(100 * state.pdfRun.done) / state.pdfRun.total}%"></i></div><p class="small">${state.pdfRun.done} / ${state.pdfRun.total} ページを描いています…</p>`);
       } else {
-        parts.push(`<div class="actions"><button class="btn primary" data-pdf>持って歩く地図を書き出す（PDF、A4 ${pagesOf(state.segments).length + 1} ページ）</button></div>`);
+        parts.push(`<div class="actions"><button class="btn" data-pdf>持って歩く地図を書き出す（PDF、A4 ${pagesOf(state.segments).length + 1} ページ）</button></div>`);
         parts.push(`<label class="row" style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" data-pdf-photo checked> 背景に航空写真を入れる（外すと線と色だけ）</label>`);
         if (state.pdfError) parts.push(`<p class="small" style="color:#c62828">${escapeHtml(state.pdfError)}</p>`);
       }
@@ -748,7 +752,7 @@ function renderProjectStep(state: AppState): string {
   parts.push(`<p class="muted small">中身は、この端末に残しているものと同じです（中心線・伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録）。読み込むと、この端末のものはファイルの中身に置き換わります。</p>`);
   if (!demo) parts.push(`<div class="actions"><button class="btn" data-demo-reset>見本（小川村 県道401号）に戻す</button></div>`);
   parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。公図は市町村から自動で取得できます（法務省の地図XML の zip を落としても構いません）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</div>`);
-  parts.push(`<div class="actions"><button class="btn primary" data-go="2">次へ：取り込み</button></div>`);
+  parts.push(`<div class="actions"><button class="btn primary next" data-go="2">次へ：取り込み</button></div>`);
   return parts.join("");
 }
 
@@ -1049,7 +1053,7 @@ function renderTrackStep(state: AppState): string {
   } else {
     parts.push(numField("band.roadHalf", "道路の半幅", t.band.roadHalf, "m", 0.5, 0, 20));
   }
-  parts.push(`<div class="actions"><button class="btn primary" type="submit">${t.source.kind === "vehicle" ? "架空の軌跡図を作る" : "この範囲で拾い直す"}</button></div>`);
+  parts.push(`<div class="actions"><button class="btn" type="submit">${t.source.kind === "vehicle" ? "架空の軌跡図を作る（数を変えたら）" : "この範囲で拾い直す"}</button></div>`);
   parts.push(`</form>`);
 
   // 結果
@@ -1067,7 +1071,7 @@ function renderTrackStep(state: AppState): string {
     parts.push(`<div class="row btns"><button class="btn small" data-save-track="kml">KML で保存</button><button class="btn small" data-save-track="geojson">GeoJSON で保存</button></div>`);
     parts.push(`<p class="muted small">${t.source.kind === "vehicle" ? "架空の軌跡図です。本物は運送会社が専用のソフトで描きます。打ち合わせの叩き台や、軌跡図が届く前の下調べに。" : "読んだ軌跡図を、この道具の形（掃く範囲と伐採範囲の外側）で書き出します。"}</p>`);
   }
-  parts.push(`<div class="actions"><button class="btn primary" data-go="3">次へ：かかる筆を見る</button></div>`);
+  parts.push(`<div class="actions"><button class="btn next" data-go="3">次へ：かかる筆を見る</button></div>`);
   parts.push(`</div>`);
   return parts.join("");
 }
@@ -1279,7 +1283,7 @@ function renderParcelStep(state: AppState): string {
   } else if (fr) {
     parts.push(renderFetch(fr));
   } else {
-    parts.push(`<div class="actions"><button class="btn primary" data-fetch-start>市町村を調べて公図を自動で取得する ${help(HELP.mojfetch)}</button></div>`);
+    parts.push(`<div class="actions"><button class="btn primary" data-fetch-start>公図を自動で取得する</button></div><p class="muted small" style="margin:-4px 0 8px">中心線が通る市町村を調べ、法務省の地図データを探します ${help(HELP.mojfetch)}</p>`);
     parts.push(`<div class="dropzone" data-parcel-drop>または、ここに公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
     if (state.parcelError) parts.push(`<p class="small err">${escapeHtml(state.parcelError)}</p>`);
     if (s.fromFile && s.maps.length) {
@@ -1613,7 +1617,8 @@ function renderJudgeStep(state: AppState): string {
   const hasKey = !!getApiKey();
   const parts: string[] = [];
   const byHuman = judged - byClaude;
-  parts.push(`<p>区切り ${help(HELP.segment)} は <b>${state.segments.length}</b>。判定が付いているのは <b>${judged}</b> ${help(HELP.judged)}（Claude ${byClaude}・人 ${byHuman}）。</p>`);
+  parts.push(tiles([{ label: "区切り", value: state.segments.length }, { label: "判定あり", value: judged, unit: `/ ${state.segments.length}`, tone: judged === state.segments.length && judged ? "ok" : undefined }, { label: "人が直した", value: byHuman }]));
+  parts.push(`<p>区切り ${help(HELP.segment)} ごとに、航空写真の切り抜きから木の割合を判定します ${help(HELP.judged)}。Claude ${byClaude}・人 ${byHuman}。</p>`);
   parts.push(`<p class="small muted">判定は、区切り 40 ほどをまとめた写真 1 枚ずつ（${windows.length} 枚）を Claude に見せて進めます。</p>`);
   if (state.run) {
     const r = state.run;
@@ -1631,7 +1636,7 @@ function renderJudgeStep(state: AppState): string {
         `</div>`,
     );
     if (state.centerline.source.kind === "demo" && judged) parts.push(`<div class="actions"><button class="btn" data-reset-demo>判定を見本に戻す</button></div>`);
-    parts.push(`<div class="actions"><button class="btn primary" data-go="5">次へ：確かめて直す</button></div>`);
+    parts.push(`<div class="actions"><button class="btn next" data-go="5">次へ：確かめて直す</button></div>`);
   }
   return parts.join("");
 }
@@ -1728,6 +1733,11 @@ function refreshJudgments(state: AppState) {
   renderChecks(state);
   persist(state);
   if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
+}
+
+/** 数字のタイル。文より先に数を見せる（手順 3・4・5・7） */
+function tiles(items: { label: string; value: string | number; unit?: string; tone?: "warn" | "ok" }[]): string {
+  return `<div class="tiles">${items.map((t) => `<div class="tile ${t.tone ?? ""}"><div class="label">${escapeHtml(t.label)}</div><div class="value">${escapeHtml(String(t.value))}${t.unit ? `<small>${escapeHtml(t.unit)}</small>` : ""}</div></div>`).join("")}</div>`;
 }
 
 function countKinds(state: AppState): string {
@@ -2231,13 +2241,12 @@ function recomputeForest(state: AppState) {
   state.forestFlags = forestMismatch(state.segments, state.judgments, state.segForest);
 }
 
-function forestSummary(state: AppState): string {
-  if (!state.forest) return escapeHtml(state.forestNote);
+function forestCount(state: AppState): { minyu: number; part: number; koku: number } {
   let minyu = 0;
   let part = 0;
   let koku = 0;
   for (const h of state.hits) {
-    const fi = state.forest.get(h.parcelId);
+    const fi = state.forest?.get(h.parcelId);
     if (!fi || fi.ratio < 0.02) continue;
     if (fi.kinds.includes("国有林")) koku++;
     if (fi.kinds.includes("民有林")) {
@@ -2245,7 +2254,13 @@ function forestSummary(state: AppState): string {
       if (fi.ratio < 0.5) part++;
     }
   }
-  return `うち <b>${minyu} 筆</b>が森林計画の対象の民有林の区域にかかります（一部だけ ${part}${koku ? `、国有林 ${koku}` : ""}）。この筆には一覧表で「伐採の届出が要るかもしれない（市町村に確かめる）」の目印を付けます。`;
+  return { minyu, part, koku };
+}
+
+function forestSummary(state: AppState): string {
+  if (!state.forest) return escapeHtml(state.forestNote);
+  const { minyu, part, koku } = forestCount(state);
+  return `${minyu} 筆が森林計画の対象の民有林の区域にかかります（一部だけ ${part}${koku ? `、国有林 ${koku}` : ""}）。一覧表では「伐採の届出が要るかもしれない（市町村に確かめる）」の目印が付きます。`;
 }
 
 /* ---------- 持って歩く地図（F8） ---------- */

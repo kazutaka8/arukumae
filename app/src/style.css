@@ -1,18 +1,39 @@
-/* 画面の割り付け（spec §6）。地図を画面いっぱいに出し、パネルはその上に重ねる */
+/*
+ * 画面の割り付け（spec §6）。地図を画面いっぱいに出し、パネルはその上に重ねる。
+ *
+ * 見た目の決め方（2026-11-03 に見直した。会社で使ってもらう道具として「地図アプリの質感で、現場の道具の素直さを残す」）：
+ * - 赤（ロゴの色）は「いま押す所」だけ：現在の手順の印と、パネルに 1 つの主ボタン。ほかのボタンは細い枠の白、やめる・消すは文字だけ
+ * - 字は 3 段（見出し 15・本文 13・補足 11.5）。太字は見出しと札だけ
+ * - 箱で囲まず、0.5px の罫線と余白で区切る。影は地図に浮くパネルだけ
+ * - パネルの地は薄い灰色（白い画面でも落ち着く）。表と入力の欄は白
+ * - 動きは 150ms の滑りだけ
+ */
 :root {
   --bg: #ffffff;
-  --panel: rgba(255, 255, 255, 0.96);
-  --ink: #1f2933;
-  --muted: #6b7a89;
-  --line: #d9dee3;
-  --accent: #c62828; /* ロゴの赤に合わせる */
-  --accent-soft: #fdecea;
-  --shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  --panel: rgba(247, 248, 250, 0.97);
+  --panel-solid: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #eef0f3;
+  --ink: #1d232a;
+  --muted: #677282;
+  --faint: #98a1ad;
+  --line: rgba(29, 35, 42, 0.12);
+  --line-strong: rgba(29, 35, 42, 0.24);
+  --accent: #b7262a; /* ロゴの赤。少しだけ沈めて、面に乗っても騒がしくない */
+  --accent-soft: #fbeaea;
+  --ok: #2e7d32;
+  --ok-soft: #e8f3e8;
+  --warn: #9a5b00;
+  --warn-soft: #fbf1dc;
+  --shadow: 0 1px 2px rgba(20, 24, 30, 0.08), 0 8px 24px rgba(20, 24, 30, 0.14);
   --topbar-h: 44px;
-  --radius: 8px;
+  --radius: 10px;
+  --dur: 150ms;
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.55;
   color: var(--ink);
+  -webkit-font-smoothing: antialiased;
 }
 
 * { box-sizing: border-box; }
@@ -24,36 +45,45 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
   height: var(--topbar-h);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 10px;
+  gap: 14px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
 }
-.brand { font-weight: 700; letter-spacing: 0.04em; }
-.brand::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-right: 8px; vertical-align: -1px; }
-.project { color: var(--muted); }
+.brand { font-weight: 600; letter-spacing: 0.06em; font-size: 13.5px; }
+.brand::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-right: 9px; vertical-align: 0; }
+.project { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spacer { flex: 1; }
-.save-state { color: var(--muted); font-size: 12px; }
+.save-state { color: var(--muted); font-size: 11.5px; padding: 2px 9px; border-radius: 10px; background: var(--surface-2); }
+.save-state.err { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 
 .main { position: relative; height: calc(100% - var(--topbar-h)); }
 /* MapLibre の CSS（.maplibregl-map）が position: relative を当てるので、指定の強さを上げて勝たせる */
 .main > .map { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-/* ボタン */
+/* ボタン。既定は細い枠の白。primary はパネルに 1 つ（いま押す所）。next は「次へ」で、矢印を付けて主ボタンより軽く */
 .btn {
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  border-radius: 8px;
   padding: 6px 12px;
   cursor: pointer;
   font: inherit;
   color: var(--ink);
+  transition: background var(--dur), border-color var(--dur), transform var(--dur);
 }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.ghost { background: transparent; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn .cost { color: inherit; opacity: 0.8; font-size: 12px; margin-left: 4px; }
-.icon-btn { border: 0; background: transparent; font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 8px; color: var(--ink); }
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: scale(0.985); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:hover { background: #a21f23; }
+.btn.next { font-weight: 600; justify-content: space-between; display: flex; align-items: center; }
+.btn.next::after { content: "→"; color: var(--muted); margin-left: 10px; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.ghost:hover { background: var(--surface-2); color: var(--ink); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn .cost { color: inherit; opacity: 0.85; font-size: 11.5px; margin-left: 6px; font-weight: 400; }
+.icon-btn { border: 0; background: transparent; font-size: 17px; line-height: 1; cursor: pointer; padding: 4px 8px; color: var(--muted); border-radius: 6px; }
+.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
 
 /* パネル共通 */
 .panel {
@@ -66,7 +96,7 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
   box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
-  transition: transform 0.2s ease, opacity 0.2s ease;
+  transition: transform var(--dur) ease, opacity var(--dur) ease;
   overflow: hidden;
   z-index: 3; /* 地図の操作ボタン・出典（z-index 2）より手前 */
 }
@@ -78,70 +108,83 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .panel.steps.no-steps .list-col { border-left: 0; }
 .head-btns { display: flex; align-items: center; gap: 2px; }
 .tabs .icon-btn, .tabs .btn.small { flex: none; align-self: center; margin: 0 4px; }
-/* 一覧の列。手順の右に縦に出し、幅はドラッグ（.resizer）で変える */
-.panel.steps .list-col { width: var(--list-w); flex: none; position: relative; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
+/* 一覧の列。手順の右に縦に出し、幅はドラッグ（.resizer）で変える。表は白地 */
+.panel.steps .list-col { width: var(--list-w); flex: none; position: relative; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
 .panel.steps.resizing { transition: none; user-select: none; }
 .resizer { position: absolute; top: 0; bottom: 0; right: -3px; width: 7px; cursor: col-resize; z-index: 1; }
-.resizer:hover, .resizing .resizer { background: rgba(198, 40, 40, 0.25); }
+.resizer:hover, .resizing .resizer { background: rgba(183, 38, 42, 0.2); }
 /* 詳細は上 56% まで。下の凡例（40% まで）と重ならないように。凡例をたためば詳細が下まで伸びる */
 .panel.detail { right: 10px; width: 320px; bottom: auto; max-height: 56%; }
 .main:has(#legend.collapsed) .panel.detail { max-height: calc(100% - 20px); }
 .panel.collapsed.steps { transform: translateX(calc(-100% - 20px)); opacity: 0; pointer-events: none; }
 .panel.collapsed.detail { transform: translateX(calc(100% + 20px)); opacity: 0; pointer-events: none; }
-.panel-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 13px; }
 .panel-body { padding: 12px 14px; overflow: auto; }
 
-/* 手順 */
+/* 手順の列。現在は左に赤い線と赤い番号、済んだものは緑の印 */
 .step-list { list-style: none; margin: 0; padding: 6px 0; border-bottom: 1px solid var(--line); }
-.step-list li { display: flex; align-items: center; gap: 10px; padding: 4px 14px; cursor: pointer; color: var(--muted); }
-.step-list li:hover { background: #f3f5f7; }
-.step-list li .num { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
-.step-list li.done { color: var(--ink); }
-.step-list li.done .num { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
-.step-list li.current { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
+.step-list li { display: flex; align-items: center; gap: 10px; padding: 5px 14px; cursor: pointer; color: var(--muted); border-left: 2px solid transparent; transition: background var(--dur); }
+.step-list li:hover { background: rgba(29, 35, 42, 0.04); }
+.step-list li .num { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line-strong); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex: none; font-variant-numeric: tabular-nums; }
+.step-list li.done { color: var(--muted); }
+.step-list li.done .num { border-color: #9ccc9f; color: var(--ok); font-size: 0; }
+.step-list li.done .num::after { content: "✓"; font-size: 11px; }
+.step-list li.current { color: var(--ink); font-weight: 600; border-left-color: var(--accent); background: rgba(183, 38, 42, 0.05); }
 .step-list li.current .num { background: var(--accent); border-color: var(--accent); color: #fff; }
-.step-body { padding: 12px 14px; overflow: auto; flex: 1; min-height: 0; }
+.step-body { padding: 12px 14px 16px; overflow: auto; flex: 1; min-height: 0; }
 .step-body .nav { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .step-body .nav .pos { flex: 1; text-align: center; font-variant-numeric: tabular-nums; }
-.step-body h3 { margin: 0 0 6px; font-size: 15px; }
+.step-body h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.step-body h3 + p { color: var(--muted); }
+.step-body h4 { margin: 14px 0 6px; font-size: 11.5px; color: var(--muted); font-weight: 600; letter-spacing: 0.04em; }
 .step-body p { margin: 0 0 10px; line-height: 1.6; }
-.step-body .next { background: #fff8e1; border-left: 3px solid #f9a825; padding: 8px 10px; margin: 10px 0; border-radius: 4px; }
-.step-body .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+/* 補足の箱。前は黄色だったが、色は「いま押す所」と判定の色に取っておく */
+.step-body .next { color: var(--muted); border-left: 2px solid var(--line-strong); padding: 2px 10px; margin: 12px 0; line-height: 1.55; }
+.step-body .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .step-body .actions .btn { text-align: left; }
-.dropzone { border: 2px dashed var(--line); border-radius: var(--radius); padding: 16px; text-align: center; color: var(--muted); margin-top: 8px; }
+.dropzone { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 12px; text-align: center; color: var(--muted); margin-top: 8px; background: var(--surface); font-size: 12px; transition: border-color var(--dur), background var(--dur); }
 .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
 
+/* 数字のタイル：手順の上に「かかる筆 348」のように。文より先に数を見せる */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.tile .label { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .value { font-size: 20px; font-weight: 600; line-height: 1.2; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .value small { font-size: 11.5px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+.tile.warn .value { color: var(--warn); }
+.tile.ok .value { color: var(--ok); }
+
 /* 詳細 */
-.kv { display: grid; grid-template-columns: 7em 1fr; gap: 4px 10px; margin: 0; }
+.kv { display: grid; grid-template-columns: 6.5em 1fr; gap: 5px 10px; margin: 0; }
 .kv dt { color: var(--muted); }
-.kv dd { margin: 0; }
-.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #eceff1; }
-.badge.low { background: #fff3e0; color: #e65100; }
-.badge.high { background: #e8f5e9; color: #2e7d32; }
-.badge.human { background: #e3f2fd; color: #1565c0; }
-.badge.forest { background: #e8f5e9; color: #2e7d32; }
-.badge.change { background: #ede7f6; color: #4527a0; }
+.kv dd { margin: 0; min-width: 0; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; background: var(--surface-2); color: #444a52; }
+.badge.low { background: var(--warn-soft); color: var(--warn); }
+.badge.high { background: var(--ok-soft); color: var(--ok); }
+.badge.human { background: #e4eefb; color: #1b57a6; }
+.badge.forest { background: var(--ok-soft); color: var(--ok); }
+.badge.change { background: #ece8f7; color: #4e3b9a; }
 .legend-body label.year { gap: 6px; }
-.legend-body label.year select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; }
+.legend-body label.year select { font: inherit; font-size: 11.5px; padding: 2px 4px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
 .seg-photo-pair:has(figure:nth-child(3)) { grid-template-columns: 1fr 1fr 1fr; }
 
 /* 一覧の列（タブで「かかる筆」「確かめる所」を切り替える） */
-.tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); background: #fafbfc; }
-.tab { flex: 1; border: 0; background: transparent; padding: 9px 8px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+.tabs { display: flex; flex: none; border-bottom: 1px solid var(--line); background: var(--panel-solid); }
+.tab { flex: 1; border: 0; background: transparent; padding: 9px 8px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color var(--dur); }
 .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
-.tab .count { font-weight: 400; font-size: 12px; }
-.list-body { overflow: auto; flex: 1; }
+.tab .count { font-weight: 400; font-size: 11.5px; color: var(--faint); }
+.list-body { overflow: auto; flex: 1; background: var(--surface); }
 .list-body .empty { padding: 14px; color: var(--muted); line-height: 1.6; }
-table.list { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.list th, table.list td { padding: 4px 8px; border-bottom: 1px solid #eef1f3; text-align: left; white-space: nowrap; }
-table.list th { position: sticky; top: 0; background: #fafbfc; color: var(--muted); font-weight: 600; }
+table.list { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.list th, table.list td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+table.list th { position: sticky; top: 0; background: var(--surface); color: var(--muted); font-weight: 600; font-size: 11.5px; box-shadow: inset 0 -1px 0 var(--line); border-bottom: 0; }
 table.list tr { cursor: pointer; }
-table.list tr:hover td { background: #f3f5f7; }
+table.list tr:hover td { background: rgba(29, 35, 42, 0.035); }
 table.list tr.selected td { background: var(--accent-soft); }
-table.list tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+table.list tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.tree-bar { display: inline-block; width: 36px; height: 8px; border-radius: 2px; background: #eceff1; vertical-align: middle; overflow: hidden; }
-.tree-bar i { display: block; height: 100%; background: #2e7d32; }
+.tree-bar { display: inline-block; width: 36px; height: 6px; border-radius: 3px; background: var(--surface-2); vertical-align: middle; overflow: hidden; }
+.tree-bar i { display: block; height: 100%; background: var(--ok); }
 
 /* 判定を直すフォーム（詳細の中） */
 .fix { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
@@ -151,16 +194,16 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .fix .field > span { color: var(--muted); }
 .fix .radios { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .fix .radios label { display: inline-flex; align-items: center; gap: 2px; }
-.fix select, .fix input[name="why"] { width: 100%; padding: 4px 6px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.fix select, .fix input[name="why"] { width: 100%; padding: 5px 7px; font: inherit; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
 .fix .row.end { gap: 8px; }
-.btn.small { padding: 2px 8px; font-size: 12px; }
+.btn.small { padding: 2px 9px; font-size: 11.5px; border-radius: 6px; }
 table.list.kps { margin-top: 8px; }
 
 /* 判定の進み具合 */
-.progress { height: 6px; background: #eceff1; border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin: 8px 0; }
 .progress i { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
-.log { font-size: 12px; color: var(--muted); max-height: 7em; overflow: auto; margin: 0; }
-.log .err { color: #c62828; }
+.log { font-size: 11.5px; color: var(--muted); max-height: 7em; overflow: auto; margin: 0; }
+.log .err { color: var(--accent); }
 
 /* 凡例 */
 .legend {
@@ -171,7 +214,7 @@ table.list.kps { margin-top: 8px; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   width: 230px;
-  font-size: 12px;
+  font-size: 11.5px;
   z-index: 2;
   max-height: 40%;
   overflow: auto;
@@ -181,58 +224,59 @@ table.list.kps { margin-top: 8px; }
 .legend-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 6px 6px 12px; font-weight: 600; }
 .legend-body { padding: 0 12px 10px; }
 .legend-body label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
-.legend-body .sw { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.25); flex: none; }
-.legend-body .sub { margin: 4px 0 2px 22px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); }
+.legend-body .sw { width: 13px; height: 13px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.25); flex: none; }
+.legend-body .sub { margin: 2px 0 4px 22px; display: flex; flex-wrap: wrap; gap: 3px 10px; color: var(--muted); }
 .legend-body .sub span { display: inline-flex; align-items: center; gap: 4px; }
 
 /* 設定の窓 */
-.dialog { border: 0; border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; width: 420px; max-width: 95vw; }
-.dialog::backdrop { background: rgba(0,0,0,0.3); }
-.dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.dialog { border: 0; border-radius: 12px; box-shadow: var(--shadow); padding: 20px 22px; width: 420px; max-width: 95vw; background: var(--surface); }
+.dialog::backdrop { background: rgba(20, 24, 30, 0.35); }
+.dialog h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
 .dialog label { display: block; margin: 10px 0; font-weight: 600; }
-.dialog label input[type="password"], .dialog label select { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; font-weight: 400; }
+.dialog label input[type="password"], .dialog label select { display: block; width: 100%; margin-top: 4px; padding: 7px 9px; font: inherit; border: 1px solid var(--line-strong); border-radius: 8px; font-weight: 400; }
 .dialog label.row { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 .row.end { display: flex; justify-content: flex-end; }
 
-/* 用語の説明（panels.ts の help） */
-.help { display: inline-flex; width: 16px; height: 16px; border-radius: 50%; background: #e0e4e8; color: var(--muted); font-size: 11px; font-weight: 700; align-items: center; justify-content: center; cursor: help; vertical-align: 1px; margin: 0 2px; user-select: none; }
-.help:hover, .help:focus { background: var(--accent); color: #fff; outline: none; }
-.tip { position: fixed; z-index: 50; background: #1f2933; color: #fff; padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; box-shadow: var(--shadow); pointer-events: none; }
+/* 用語の説明（panels.ts の help）。本文に説明を長く書かず、ここに逃がす */
+.help { display: inline-flex; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--line-strong); color: var(--muted); font-size: 10px; font-weight: 600; align-items: center; justify-content: center; cursor: help; vertical-align: 1px; margin: 0 2px; user-select: none; transition: background var(--dur), color var(--dur); }
+.help:hover, .help:focus { background: var(--ink); border-color: var(--ink); color: #fff; outline: none; }
+.tip { position: fixed; z-index: 50; background: var(--ink); color: #fff; padding: 8px 10px; border-radius: 8px; font-size: 11.5px; line-height: 1.6; box-shadow: var(--shadow); pointer-events: none; }
 
 .muted { color: var(--muted); }
-.small { font-size: 12px; }
+.small { font-size: 11.5px; }
 
 /* 手順のパネルが開いていても地図の操作がしやすいよう、地図の操作ボタンは右上のまま */
-.maplibregl-ctrl-top-right { top: 10px; right: 340px; transition: right 0.2s; }
+.maplibregl-ctrl-top-right { top: 10px; right: 340px; transition: right var(--dur); }
 .detail.collapsed ~ .maplibregl-ctrl-top-right { right: 10px; }
-
+.maplibregl-ctrl-group { box-shadow: var(--shadow) !important; border-radius: 8px !important; }
 
 /* 手順 2：伐採範囲の決め方（車両の寸法・ファイル・仮の帯） */
-.track h4 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.track h4 { margin: 14px 0 6px; font-size: 11.5px; color: var(--muted); font-weight: 600; letter-spacing: 0.04em; }
 .track .field { display: grid; grid-template-columns: 1fr 5.5em; gap: 6px; align-items: center; margin: 4px 0; }
 .track .field > span { color: var(--ink); }
-.track .field input, .track .field select, .track select.wide { width: 100%; padding: 4px 6px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.track .field input, .track .field select, .track select.wide { width: 100%; padding: 5px 7px; font: inherit; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
 .track select.wide { margin-bottom: 6px; }
 .track .field input[type="number"] { text-align: right; }
 .track details { margin: 6px 0; }
-.track details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-.track .result { background: #f3e5f5; border-left: 3px solid #7b1fa2; padding: 8px 10px; margin: 10px 0; border-radius: 4px; line-height: 1.6; }
-.track .result .err { color: #c62828; }
+.track details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+/* 結果の箱：色は付けず、罫線で区切る */
+.track .result { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 8px 0; margin: 12px 0; line-height: 1.6; }
+.track .result .err { color: var(--accent); }
 .track .row.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.track input[type="file"] { width: 100%; font-size: 12px; }
+.track input[type="file"] { width: 100%; font-size: 11.5px; }
 .track .zone-add { display: grid; grid-template-columns: 1fr auto 1fr 4.5em auto; gap: 4px; align-items: center; margin-top: 6px; }
-.track .zone-add input { width: 100%; padding: 4px 4px; font: inherit; border: 1px solid var(--line); border-radius: 6px; text-align: right; }
+.track .zone-add input { width: 100%; padding: 4px 4px; font: inherit; border: 1px solid var(--line-strong); border-radius: 6px; text-align: right; background: var(--surface); }
 
 /* 手順 2 の公図の内訳（地図ごとの筆の数）。一覧の表より小さく */
-.track table.list.small { font-size: 12px; margin: 6px 0; }
-.track table.list.small th, .track table.list.small td { padding: 2px 6px; }
+.track table.list.small, .step-body table.list.small { font-size: 11.5px; margin: 6px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.track table.list.small th, .track table.list.small td, .step-body table.list.small th, .step-body table.list.small td { padding: 3px 6px; }
 .track table.list .num { text-align: right; }
 
 /* 区切りの詳細に出す、Claude が見た写真の切り抜き（札なし・札あり） */
 .seg-photo { margin: 10px 0; }
 .seg-photo-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .seg-photo-pair figure { margin: 0; }
-.seg-photo-pair img { width: 100%; display: block; border-radius: 4px; border: 1px solid var(--line); }
+.seg-photo-pair img { width: 100%; display: block; border-radius: 6px; border: 1px solid var(--line); }
 .seg-photo-pair figcaption { font-size: 11px; color: var(--muted); text-align: center; margin-top: 2px; }
 
 /* ---------- タブレット（iPad）----------
@@ -257,26 +301,26 @@ table.list.kps { margin-top: 8px; }
 }
 
 /* 現地の記録（持ち運びモード）。指で押しやすい大きさに。たためる（どの欄に入れるか迷わないよう、場面で開く欄を変える） */
-.note { margin: 10px 0; padding: 8px 10px; background: #f3f5f7; border-radius: 6px; }
-.note-head { font-weight: 600; font-size: 13px; cursor: pointer; }
+.note { margin: 10px 0; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.note-head { font-weight: 600; font-size: 12.5px; cursor: pointer; }
 .note-head .badge { margin-left: 6px; }
 .note[open] .note-head { margin-bottom: 6px; }
-.panel-body p.guide { margin: 8px 0 4px; line-height: 1.5; }
+.panel-body p.guide { margin: 8px 0 4px; line-height: 1.5; color: var(--muted); }
 .note-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 6px; }
-.note-btns .btn { padding: 8px 4px; font-size: 13px; }
-.note input { width: 100%; padding: 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.note-btns .btn { padding: 8px 4px; font-size: 12.5px; text-align: center; }
+.note input { width: 100%; padding: 8px; font: inherit; border: 1px solid var(--line-strong); border-radius: 6px; }
 .note .row.end { margin-top: 6px; }
 table.list td.note-cell { text-align: center; font-weight: 700; }
-table.list td.note-cell.ok { color: #2e7d32; }
-table.list td.note-cell.ng { color: #c62828; }
+table.list td.note-cell.ok { color: var(--ok); }
+table.list td.note-cell.ng { color: var(--accent); }
 
 /* 画面が止まる計算の知らせ（中央上） */
-.busy { position: fixed; left: 50%; top: calc(var(--topbar-h) + 14px); transform: translateX(-50%); z-index: 60; background: #1f2933; color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 13px; box-shadow: var(--shadow); max-width: 90vw; }
+.busy { position: fixed; left: 50%; top: calc(var(--topbar-h) + 14px); transform: translateX(-50%); z-index: 60; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 12.5px; box-shadow: var(--shadow); max-width: 90vw; }
 
 /* ---------- スマホ幅（想定の外だが、崩れない程度に）----------
  * 手順と一覧は下の引き出しに 1 列ずつ（一覧を出すと手順は隠れる）。凡例は最初たたむ（panels.ts） */
 @media (max-width: 600px) {
-  .topbar { gap: 8px; font-size: 13px; }
+  .topbar { gap: 8px; font-size: 12.5px; }
   .topbar .brand, .topbar .project { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .topbar .save-state { display: none; }
   .panel.steps { height: 50%; }
@@ -291,21 +335,24 @@ table.list td.note-cell.ng { color: #c62828; }
 
 /* 一覧の絞り込み（タブの下）。チップは指で押せる高さに */
 .filters[hidden] { display: none; } /* display:flex が hidden 属性に勝ってしまうため */
-.filters { flex: none; padding: 6px 8px; border-bottom: 1px solid var(--line); background: #fafbfc; display: flex; flex-direction: column; gap: 6px; }
+.filters { flex: none; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel-solid); display: flex; flex-direction: column; gap: 6px; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.chip { border: 1px solid var(--line); background: #fff; border-radius: 14px; padding: 3px 10px; min-height: 28px; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
-.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 14px; padding: 3px 10px; min-height: 26px; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; transition: background var(--dur), color var(--dur); }
+.chip:hover { background: var(--surface-2); }
+.chip.active { background: var(--ink); border-color: var(--ink); color: #fff; }
 .filter-row { display: flex; align-items: center; gap: 8px; }
-.filter-row input { flex: 1; min-width: 0; font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }
-.filters .shown { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.filter-row input { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 5px 9px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.filters .shown { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 
 /* 手順 1：案件名と案件ファイル */
-input.text { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; width: 100%; box-sizing: border-box; }
-.step-body p.err { color: #c62828; }
+input.text { font: inherit; font-size: 12.5px; padding: 5px 7px; border: 1px solid var(--line-strong); border-radius: 6px; width: 100%; box-sizing: border-box; background: var(--surface); }
+.step-body p.err { color: var(--accent); }
 .step-body .row.btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 
 /* 手順 1：中心線を決める（F12）。3 つの出どころを畳める箱に */
-.step-body details.center { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; margin: 10px 0; }
-.step-body details.center > summary { cursor: pointer; }
-.step-body details.center h4 { margin: 12px 0 4px; font-size: 13px; }
-.save-state.err { color: #c62828; font-weight: 600; }
+.step-body details.center { border-top: 1px solid var(--line); padding: 8px 0 4px; margin: 12px 0; }
+.step-body details.center > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+.step-body details.center > summary::before { content: "▸"; color: var(--muted); font-size: 11px; transition: transform var(--dur); }
+.step-body details.center[open] > summary::before { transform: rotate(90deg); }
+.step-body details.center h4 { margin: 12px 0 4px; }
+input:focus-visible, select:focus-visible, button:focus-visible, .chip:focus-visible { outline: 2px solid rgba(183, 38, 42, 0.35); outline-offset: 1px; }
