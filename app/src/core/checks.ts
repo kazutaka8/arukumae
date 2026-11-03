@@ -6,7 +6,7 @@
  * 画面の一覧・一覧表の列・持って歩く地図の表が同じ並びになるよう、ここで作る
  */
 import type { Segment } from "./geom";
-import type { Judgment } from "./types";
+import { isRealChange, type Judgment } from "./types";
 
 export interface Check {
   segmentId: string;
@@ -23,7 +23,7 @@ export function listChecks(segments: Segment[], judgments: Map<string, Judgment>
     if (j.conf === "低") out.push({ segmentId: s.id, kind: "低", why: j.why, tree: j.tree });
     const f = forestFlags?.get(s.id);
     if (f) out.push({ segmentId: s.id, kind: "森林", why: f, tree: j.tree });
-    if (j.change && j.change !== "変化なし") out.push({ segmentId: s.id, kind: "変化", why: `${j.oldYear ?? "前"} 年度の写真と比べて「${j.change}」（当時 ${j.treeOld ?? "?"}% → 今 ${j.tree}%）`, tree: j.tree });
+    if (isRealChange(j.change)) out.push({ segmentId: s.id, kind: "変化", why: `${j.oldYear ?? "前"} 年度の写真と比べて「${j.change}」（当時 ${j.treeOld ?? "?"}% → 今 ${j.tree}%）`, tree: j.tree });
   }
   return out;
 }

@@ -39,7 +39,7 @@ export const LAYER_IDS = {
 export type LayerGroup = keyof typeof LAYER_IDS;
 
 const ATTRIBUTION =
-  '出典：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院（地理院タイル 全国最新写真・年度別写真）</a>を加工 ｜ ' +
+  '出典：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院（地理院タイル 全国最新写真・年度別写真）</a>を加工（2023 年度の一部は Landsat-8 と GRUS画像（© Axelspace）） ｜ ' +
   '<a href="https://www.geospatial.jp/ckan/dataset/houmusyouchizu-2026-1-995" target="_blank">登記所備付地図データ 上水内郡小川村（法務省）</a>を加工 ｜ ' +
   '<a href="https://www.geospatial.jp/ckan/dataset/layer" target="_blank">森林計画対象森林レイヤ（林野庁）</a> ｜ ' +
   '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>';
@@ -63,7 +63,8 @@ export function createMap(container: HTMLElement, center: [number, number]): MlM
           minzoom: 2,
           maxzoom: 18,
         },
-        // 年度別写真。全国最新写真の上に重ね、年を選んだときだけ見せる。無い所（タイルが 404）は下の最新写真が透けて見える
+        // 年度別写真。全国最新写真の上に重ね、年を選んだときだけ見せる。無い所（タイルが 404）は下の最新写真が透けて見える。
+        // 2023 年度の一部は Landsat-8（NASA/USGS）と GRUS の画像で、地理院が「GRUS画像（© Axelspace）」の表記を求めている（出典の文に入れてある）
         "photo-year": {
           type: "raster",
           tiles: [photoTileTemplate("2022")],
@@ -108,7 +109,7 @@ export function createMap(container: HTMLElement, center: [number, number]): MlM
     .addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: ATTRIBUTION }), "bottom-right");
 }
 
-/** 写真の年を切り替える。null なら全国最新写真だけ。年度別写真の 2023 年の一部には Landsat・GRUS の画像が混じる（出典は凡例に） */
+/** 写真の年を切り替える。null なら全国最新写真だけ */
 export function setPhotoYear(map: MlMap, year: PhotoLayer | null, photoVisible = true) {
   const src = map.getSource("photo-year") as maplibregl.RasterTileSource | undefined;
   if (!src) return;

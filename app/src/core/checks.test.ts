@@ -10,11 +10,12 @@ describe("現地で確かめる所", () => {
   const dense = resample([[0, 0], [40, 0]] as EN[], 1);
   const segs = buildSegments(dense, leftNormals(dense), { step: 10, roadHalf: 3, bandOut: 10 });
 
-  it("確信 低・森林の食い違い・別の年の写真との変化の 3 つが並ぶ。変化なしは入れない", () => {
+  it("確信 低・森林の食い違い・別の年の写真との変化の 3 つが並ぶ。「変化なし」と「分からない」は入れない", () => {
     const judgments = new Map<string, Judgment>([
       ["L000", j("L000", { conf: "低" })],
       ["L001", j("L001", { oldYear: "2022", treeOld: 100, change: "木が減った", tree: 0 })],
       ["L002", j("L002", { oldYear: "2022", treeOld: 50, change: "変化なし" })],
+      ["L003", j("L003", { oldYear: "2022", treeOld: 50, change: "分からない" })],
       ["R000", j("R000")],
     ]);
     const forest = new Map([["R000", "区域の中なのに木が 25% 以下"]]);

@@ -22,7 +22,7 @@ import { listChecks, type Check } from "./core/checks";
 import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
 import { buildProject, describeProject, parseProject, projectFileName, type ProjectFile } from "./core/project";
 import { countNotes, NOTE_RESULTS, noteText, pruneNotes, type FieldNote, type NoteResult } from "./core/notes";
-import { kindLabel, NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
+import { isRealChange, kindLabel, NOT_LAND, type Confidence, type Judgment, type ParcelHit, type ParcelKind, type TreeKind } from "./core/types";
 import type { MapReport, WorkerIn, WorkerOut } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, KIND_COLORS, setGroupVisible, setPhotoYear, setSourceData, type LayerGroup } from "./map/map";
@@ -691,11 +691,7 @@ async function readTrackFile(state: AppState, f: File) {
     if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
     state.track = { ...state.track, source: { kind: "file", name: f.name, lines: linesToPlane(lines) } };
     state.trackError = null;
-    rebuildTrack(state);
-    const covered = state.trackResult.sweep.left.filter((x) => Number.isFinite(x)).length;
-    if (covered === 0) state.trackError = "読めましたが、この区間の中心線の近く（120m 以内）に線がありません。別の道の軌跡図かもしれません。";
-    else if (covered < state.dense.length * 0.5) state.trackError = `軌跡図が区間の一部（約 ${covered}m）しか覆っていません。覆っていない所は切らない扱いです。`;
-    if (state.trackError) renderStep(state);
+    rebuildTrack(state); // 覆いの確認（別の道の軌跡図かどうか）は rebuildTrackNow の中。計算が後回しなので、ここで結果は読めない
   } catch (e) {
     state.trackError = (e as Error).message;
     renderStep(state);
@@ -979,6 +975,12 @@ function rebuildTrack(state: AppState) {
 function rebuildTrackNow(state: AppState) {
   const t0 = performance.now();
   state.trackResult = computeTrack(state.dense, state.normals, state.track);
+  // 読んだ軌跡図が区間を覆っているか。計算の直後にここで見る（前は readTrackFile で見ていて、計算を後回しにしたら前の結果を読んでいた。2026-11-03 のレビュー）
+  if (state.track.source.kind === "file") {
+    const covered = state.trackResult.sweep.left.filter((x) => Number.isFinite(x)).length;
+    if (covered === 0) state.trackError = "読めましたが、この区間の中心線の近く（120m 以内）に線がありません。別の道の軌跡図かもしれません。";
+    else if (covered < state.dense.length * 0.5) state.trackError = `軌跡図が区間の一部（約 ${covered}m）しか覆っていません。覆っていない所は切らない扱いです。`;
+  }
   state.segments = state.trackResult.segments;
   const hits = findHits(state.parcels, state.segments);
   for (const h of state.hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: false });
@@ -1075,7 +1077,8 @@ async function runJudging(state: AppState) {
       } else {
         for (const j of main.judgments) state.judgments.set(j.segmentId, j);
         log(`窓 ${k + 1}（${label}）：${main.judgments.length} 区切り、${Math.round(main.seconds)}秒、${fmtUsd(main.usd)}`);
-        const lows = main.judgments.filter((j) => j.conf === "低").map((j) => j.segmentId);
+        // 見直すのは確信「低」と、別の年の写真で変化のあった区切り（spec §8.4）
+        const lows = main.judgments.filter((j) => j.conf === "低" || isRealChange(j.change)).map((j) => j.segmentId);
         if (review && lows.length && !state.run?.cancel) {
           const rev = await judgeWindow(client, review, images, lows, second);
           if (state.run) state.run.usd += rev.usd;

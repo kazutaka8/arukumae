@@ -86,9 +86,17 @@ export function buildRows(
       決めたのは: js.length ? (js.some((j) => j.by === "人") ? (js.every((j) => j.by === "人") ? "人" : "人・Claude") : "Claude") : "",
       森林の区域: forest ? forestText(forest.get(h.parcelId)) : "",
       伐採の届出の目印: forest ? noticeText(forest.get(h.parcelId)) : "",
-      備考: "",
+      備考: remark(js),
     };
   });
+}
+
+/** 備考：別の年の写真と見比べて判定したこと（何年の写真かを出力に必ず残す。spec F11）と、変化のあった区切り */
+function remark(js: Judgment[]): string {
+  const years = [...new Set(js.map((j) => j.oldYear).filter((y): y is string => !!y))];
+  if (!years.length) return "";
+  const changes = js.filter((j) => j.change && j.change !== "変化なし").map((j) => `${j.segmentId} ${j.change}`);
+  return `${years.join("・")} 年度の写真と見比べて判定${changes.length ? `（${changes.join("、")}）` : ""}`;
 }
 
 /** 「広葉樹 3・針葉樹 1」のように、多い順に数える */

@@ -31,6 +31,10 @@ export interface ParcelProps {
 export type Confidence = "高" | "中" | "低";
 export const PHOTO_CHANGES = ["変化なし", "木が減った", "木が増えた", "造成や建物の変化", "分からない"] as const;
 export type PhotoChange = (typeof PHOTO_CHANGES)[number];
+/** 「確かめる所」に入れる変化。「分からない」は、その年の写真がない区切りにも付く（問いかけでそう指示している）ので入れない */
+export function isRealChange(c: PhotoChange | undefined): boolean {
+  return c === "木が減った" || c === "木が増えた" || c === "造成や建物の変化";
+}
 export type TreeKind = "針葉樹" | "広葉樹" | "混じる" | "分からない" | "なし";
 
 /** 区切り1つの判定。Claude が返した候補か、人が直した値 */

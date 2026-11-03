@@ -201,10 +201,11 @@ function items(input: FieldMapInput): Item[] {
         ["確信", j?.conf ?? ""],
         ["理由", j?.why ?? ""],
         ["決めたのは", j ? `${j.by}${j.model ? `（${j.model}）` : ""}` : ""],
+        ["別の年の写真", j?.oldYear ? `${j.oldYear} 年度：${j.treeOld ?? "?"}%。変化：${j.change ?? "分からない"}` : ""],
         ["現地の記録", noteText(input.notes?.get(id))],
       ]),
       geometry: s.geometry,
-      properties: { kind: "segment", id, side: pr.side, fromM: pr.fromM, toM: pr.toM, areaM2: pr.areaM2, tree: j?.tree ?? null, treeKind: j?.kind ?? null, conf: j?.conf ?? null, why: j?.why ?? null, by: j?.by ?? null, note: noteText(input.notes?.get(id)) || null },
+      properties: { kind: "segment", id, side: pr.side, fromM: pr.fromM, toM: pr.toM, areaM2: pr.areaM2, tree: j?.tree ?? null, treeKind: j?.kind ?? null, conf: j?.conf ?? null, why: j?.why ?? null, by: j?.by ?? null, oldYear: j?.oldYear ?? null, treeOld: j?.treeOld ?? null, change: j?.change ?? null, note: noteText(input.notes?.get(id)) || null },
     });
   }
 
