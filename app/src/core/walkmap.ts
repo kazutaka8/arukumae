@@ -98,9 +98,27 @@ export function pagesOf(segments: Segment[]): Segment[][] {
   return windowsOf(segments, 20);
 }
 
+/**
+ * 1 ページの表に出す行の上限。多いと地図の枠が潰れた（左右 40 区切り全部に記録 → 表 310mm、地図の高さがマイナス。Codex の指摘 2026-11-04）。
+ * 地図のページには ROWS_ON_MAP_PAGE 行まで（地図の枠に 110mm ほど残る）。残りは「表の続き」のページに ROWS_ON_TABLE_PAGE 行ずつ
+ */
+const ROWS_ON_MAP_PAGE = 14;
+const ROWS_ON_TABLE_PAGE = 30;
+
+export function rowChunks<T>(rows: T[]): T[][] {
+  const out: T[][] = [rows.slice(0, ROWS_ON_MAP_PAGE)];
+  for (let i = ROWS_ON_MAP_PAGE; i < rows.length; i += ROWS_ON_TABLE_PAGE) out.push(rows.slice(i, i + ROWS_ON_TABLE_PAGE));
+  return out;
+}
+
+/** PDF の総ページ数：索引図 1 ＋ ルートのページ ＋ 表の続き */
+export function walkMapPageCount(input: WalkMapInput): number {
+  return 1 + pagesOf(input.segments).reduce((n, segs) => n + rowChunks(checkRows(input, segs)).length, 0);
+}
+
 export async function buildWalkMap(input: WalkMapInput, onProgress?: (done: number, total: number) => void): Promise<Blob> {
   const pages = pagesOf(input.segments);
-  const total = pages.length + 1;
+  const total = walkMapPageCount(input);
   const pdf = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const day = new Date().toISOString().slice(0, 10);
 
@@ -109,11 +127,14 @@ export async function buildWalkMap(input: WalkMapInput, onProgress?: (done: numb
   pdf.addImage(indexCanvas.toDataURL("image/jpeg", 0.85), "JPEG", 0, 0, PAGE_W, PAGE_H);
   onProgress?.(1, total);
 
+  let pageNo = 2;
   for (let i = 0; i < pages.length; i++) {
-    const canvas = await renderRoutePage(input, pages, i, day);
-    pdf.addPage();
-    pdf.addImage(canvas.toDataURL("image/jpeg", 0.85), "JPEG", 0, 0, PAGE_W, PAGE_H);
-    onProgress?.(i + 2, total);
+    for (const canvas of await renderRoutePage(input, pages, i, day, pageNo, total)) {
+      pdf.addPage();
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.85), "JPEG", 0, 0, PAGE_W, PAGE_H);
+      onProgress?.(pageNo, total);
+      pageNo++;
+    }
   }
   return pdf.output("blob");
 }
@@ -532,7 +553,11 @@ export function checkRows(input: WalkMapInput, segs: Segment[]): CheckRow[] {
   return rows.sort((a, b) => a.fromM - b.fromM || a.id.localeCompare(b.id));
 }
 
-export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i: number, day: string): Promise<HTMLCanvasElement> {
+/**
+ * ルートのページ。表の行が多ければ、地図のページのあとに「表の続き」のページが付く（配列で返す）。
+ * pageNo・total はヘッダの「n / 全体」。buildWalkMap が通しで数える
+ */
+export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i: number, day: string, pageNo = i + 2, total = pages.length + 1): Promise<HTMLCanvasElement[]> {
   const segs = pages[i];
   const from = Math.min(...segs.map((s) => s.fromM));
   const to = Math.max(...segs.map((s) => s.toM));
@@ -540,10 +565,12 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
   const kpA = estimateKp(input.kps, from);
   const kpB = estimateKp(input.kps, to);
   const kpText = kpA && kpB ? `　KP ${fmtKm(kpA.kp)}〜${fmtKm(kpB.kp)}（推定）` : "";
-  header(ctx, input, `起点から ${from}〜${to}m${kpText}　区切り ${segs.map((s) => s.id).at(0)}〜${segs.at(-1)!.id}`, i + 2, pages.length + 1, day);
+  const title = `起点から ${from}〜${to}m${kpText}　区切り ${segs.map((s) => s.id).at(0)}〜${segs.at(-1)!.id}`;
+  header(ctx, input, title, pageNo, total, day);
 
   const rows = checkRows(input, segs);
-  const tableH = 10 + Math.max(rows.length, 3) * CHECK_ROW_H;
+  const chunks = rowChunks(rows);
+  const tableH = 10 + Math.max(chunks[0].length, 3) * CHECK_ROW_H;
   const box = { x: MARGIN, y: MARGIN + HEADER_H, w: PAGE_W - MARGIN * 2, h: PAGE_H - MARGIN * 2 - HEADER_H - FOOTER_H - LEGEND_H - tableH - 4 };
   const lat = toLonLat(input.dense[from])[1];
   const f = fitFrame(box, pageBbox(segs, input), lat);
@@ -552,11 +579,28 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
 
   // 確かめる所の表
   const ty = box.y + box.h + LEGEND_H + 2;
+  const caption = `現地で確かめる所（確信が低い・森林の区域と食い違う・変化・未判定）と、記録のある区切り：${rows.length ? `${rows.length} か所${chunks.length > 1 ? `（続きは次のページ）` : ""}` : "この区間にはありません。気づいたことを下に"}`;
+  drawCheckTable(ctx, input, chunks[0], ty, caption);
+  footer(ctx, input);
+
+  const out = [canvas];
+  for (let k = 1; k < chunks.length; k++) {
+    const [c2, ctx2] = newPage();
+    header(ctx2, input, `${title}　表の続き（${k} / ${chunks.length - 1}）`, pageNo + k, total, day);
+    drawCheckTable(ctx2, input, chunks[k], MARGIN + HEADER_H + 2, `現地で確かめる所と、記録のある区切り（続き）：${chunks[k].length} か所`);
+    footer(ctx2, input);
+    out.push(c2);
+  }
+  return out;
+}
+
+/** 確かめる所の表を ty（mm）から描く。3 行に満たなければ空の行で埋める（手で書く欄） */
+function drawCheckTable(ctx: CanvasRenderingContext2D, input: WalkMapInput, rows: CheckRow[], ty: number, caption: string) {
   font(ctx, 3.2, true);
   ctx.fillStyle = "#1f2933";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`現地で確かめる所（確信が低い・森林の区域と食い違う・変化・未判定）と、記録のある区切り：${rows.length ? `${rows.length} か所` : "この区間にはありません。気づいたことを下に"}`, mm(MARGIN), mm(ty));
+  ctx.fillText(caption, mm(MARGIN), mm(ty));
   const cols = [
     { label: "区切り", w: 18 },
     { label: "起点から", w: 20 },
@@ -593,8 +637,6 @@ export async function renderRoutePage(input: WalkMapInput, pages: Segment[][], i
   });
   while (filled.length < 3) filled.push(["", "", "", "", "○  ×", ""]);
   for (const r of filled) drawRow(r, false);
-  footer(ctx, input);
-  return canvas;
 }
 
 function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {

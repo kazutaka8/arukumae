@@ -143,17 +143,36 @@ export function parseProject(text: string, demo: DemoCenterline): ProjectFile {
   // 伐採範囲の決め方
   const track = raw.track;
   if (!isRecord(track) || !isRecord(track.source) || !isRecord(track.band)) throw new Error("伐採範囲の決め方（track）が入っていません");
-  const src = track.source as { kind?: unknown; preset?: unknown; tiltZones?: unknown; lines?: unknown; name?: unknown; halfWidth?: unknown };
+  const src = track.source as { kind?: unknown; preset?: unknown; vehicle?: unknown; tiltZones?: unknown; lines?: unknown; name?: unknown; halfWidth?: unknown };
   if (src.kind === "vehicle") {
     if (typeof src.preset !== "string" || !(src.preset in PRESETS)) throw new Error(`知らない車両の型です：${String(src.preset)}`);
     if (!Array.isArray(src.tiltZones)) src.tiltZones = [];
+    // 起立の区間と車両の寸法は数だけ通す。文字が入ると、画面に HTML として出てしまう（Codex の指摘 2026-11-04）
+    src.tiltZones = (src.tiltZones as unknown[]).map((z, i) => {
+      if (!isRecord(z) || !isNum(z.fromM) || !isNum(z.toM) || !isNum(z.tilt) || z.fromM < 0 || z.toM < z.fromM || z.tilt < 0 || z.tilt > 90) {
+        throw new Error(`起立の区間（track.source.tiltZones[${i}]）の値が数ではないか、範囲の外です`);
+      }
+      return { fromM: z.fromM, toM: z.toM, tilt: z.tilt };
+    });
+    const base = PRESETS[src.preset as keyof typeof PRESETS].vehicle as unknown as Record<string, number>;
+    const given = isRecord(src.vehicle) ? src.vehicle : {};
+    const vehicle: Record<string, number> = {};
+    for (const k of Object.keys(base)) {
+      const v = given[k];
+      if (v == null) vehicle[k] = base[k];
+      else if (!isNum(v) || v < 0) throw new Error(`車両の寸法（track.source.vehicle.${k}）が数ではありません`);
+      else vehicle[k] = v;
+    }
+    src.vehicle = vehicle;
   } else if (src.kind === "file") {
     if (!Array.isArray(src.lines)) throw new Error("軌跡図の線（track.source.lines）が入っていません");
     if (typeof src.name !== "string") src.name = "";
     // 版 1 は平面直角座標（第VIII系）で持っていた。版 2 からは緯度経度（系が案件ごとに変わるため）
     if (v1) src.lines = (src.lines as EN[][]).map((l) => l.map((en) => toLonLatZone(8, en)));
     if (!(src.lines as unknown[]).every((l) => Array.isArray(l) && l.every(isLonLat))) throw new Error("軌跡図の線（track.source.lines）の座標が数ではありません");
-  } else if (src.kind !== "band") {
+  } else if (src.kind === "band") {
+    if (!isNum(src.halfWidth) || src.halfWidth < 0) throw new Error("仮の帯の幅（track.source.halfWidth）が数ではありません");
+  } else {
     throw new Error(`知らない伐採範囲の決め方です：${String(src.kind)}`);
   }
   for (const k of ["marginStraight", "marginCurve", "cut", "roadHalf"]) {
@@ -293,6 +312,10 @@ export function mojAttribution(parcels: ProjectParcels | null, demo: boolean): s
   if (!parcels) return demo ? "登記所備付地図データ 上水内郡小川村（法務省）" : "登記所備付地図データ（法務省）";
   const cities = [...new Set(parcels.maps.filter((m) => m.isPublic && m.city).map((m) => m.city))];
   return `登記所備付地図データ${cities.length ? ` ${cities.join("・")}` : ""}（法務省）`;
+}
+
+function isNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
 }
 
 function isRecord(x: unknown): x is Record<string, unknown> {

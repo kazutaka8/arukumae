@@ -144,15 +144,24 @@ export function sweepFromLines(dense: EN[], normals: EN[], lines: EN[][], maxDis
   // 辺ごとに「どの点の近くの辺か」を先に決め、点の升に入れる
   const cell = 50;
   const buckets = new Map<string, { a: EN; b: EN; at: number }[]>();
+  // 長い辺は pieceM ごとに刻んでから所属を決める。200m の直線を両端 2 点で表した辺は真ん中の 1 点にしか所属せず、
+  // 両端 40m ずつが「軌跡図なし」になった（Codex の指摘 2026-11-04）。刻めば各片が近くの点に所属する
+  const pieceM = 20;
   for (const line of lines) {
     for (let i = 1; i < line.length; i++) {
-      const a = line[i - 1];
-      const b = line[i];
-      const mid: EN = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      const near = index.nearest(mid, maxDist + Math.hypot(b[0] - a[0], b[1] - a[1]) / 2);
-      if (!near) continue;
-      const key = Math.floor(near.index / cell);
-      (buckets.get(String(key)) ?? buckets.set(String(key), []).get(String(key))!).push({ a, b, at: near.index });
+      const A = line[i - 1];
+      const B = line[i];
+      const len = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      const pieces = Math.max(1, Math.ceil(len / pieceM));
+      for (let k = 0; k < pieces; k++) {
+        const a: EN = [A[0] + ((B[0] - A[0]) * k) / pieces, A[1] + ((B[1] - A[1]) * k) / pieces];
+        const b: EN = [A[0] + ((B[0] - A[0]) * (k + 1)) / pieces, A[1] + ((B[1] - A[1]) * (k + 1)) / pieces];
+        const mid: EN = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        const near = index.nearest(mid, maxDist + len / pieces / 2);
+        if (!near) continue;
+        const key = Math.floor(near.index / cell);
+        (buckets.get(String(key)) ?? buckets.set(String(key), []).get(String(key))!).push({ a, b, at: near.index });
+      }
     }
   }
   for (let s = 0; s < n; s++) {

@@ -19,7 +19,7 @@ import { setZone, toLonLat, toPlane, zoneLabel, zoneOf, type EN, type LonLat } f
 import { parseNamedBytes, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
 import { computeTrack, DEFAULT_TRACK, describeTrack, legacyTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
-import { buildWalkMap, pagesOf, type WalkMapInput } from "./core/walkmap";
+import { buildWalkMap, walkMapPageCount, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
 import { listChecks, treeText, type Check } from "./core/checks";
 import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
@@ -61,6 +61,8 @@ interface AppState {
   trackResult: TrackResult;
   /** 手順 2 で読み込みに失敗したときの言葉 */
   trackError: string | null;
+  /** 手順 2 で「軌跡図のファイルを読む」を選んだがまだ読んでいない状態。読むまで track は前のまま（空の軌跡で置き換えない） */
+  trackDraft: "file" | null;
   segments: Segment[];
   segmentsGeo: FeatureCollection<Polygon>;
   parcels: ParcelFeature[];
@@ -188,6 +190,7 @@ async function main() {
     track: project.track,
     trackResult,
     trackError: null,
+    trackDraft: null,
     segments: trackResult.segments,
     segmentsGeo: applyJudgments(segmentsToGeoJSON(trackResult.segments), judgments),
     parcels,
@@ -397,6 +400,8 @@ function loadProject(state: AppState, p: ProjectFile) {
   state.normals = leftNormals(state.dense);
   state.track = p.track;
   state.trackError = null;
+  state.trackDraft = null;
+  cancelRun(state);
   state.judgments = new Map(p.judgments.map((j) => [j.segmentId, j]));
   state.unjudged = new Set(p.unjudged);
   state.kps = p.kps;
@@ -464,6 +469,7 @@ function applyCenterline(state: AppState, coords: LonLat[], roadName: string, so
   const zones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones.length : 0;
   const lost = [state.judgments.size ? `判定 ${state.judgments.size}` : "", state.kps.length ? `距離標 ${state.kps.length}` : "", state.notes.size ? `現地の記録 ${state.notes.size}` : "", zones ? `起立の区間 ${zones}` : ""].filter(Boolean);
   if (lost.length && !confirm(`中心線を変えると、${lost.join("・")}は消えます（起点からの距離と区切りの番号が変わるため）。続けますか？\n残したいなら、先に「案件を保存する（JSON）」で案件ファイルにしてください。`)) return false;
+  cancelRun(state); // 区切りが変わるので、走っている判定の答えは捨てる
   const demo = source.kind === "demo";
   const zone = zoneOf(midpoint(clean));
   showBusy("中心線を決め直しています。区切りとかかる筆を作り直すのに数秒かかります…");
@@ -635,7 +641,7 @@ function renderStep(state: AppState) {
       if (state.pdfRun) {
         parts.push(`<div class="progress"><i style="width:${(100 * state.pdfRun.done) / state.pdfRun.total}%"></i></div><p class="small">${state.pdfRun.done} / ${state.pdfRun.total} ページを描いています…</p>`);
       } else {
-        parts.push(`<div class="actions"><button class="btn" data-pdf>PDF（A4 ${pagesOf(state.segments).length + 1} ページ）</button></div>`);
+        parts.push(`<div class="actions"><button class="btn" data-pdf>PDF（A4 ${walkMapPageCount(walkMapInput(state, false))} ページ）</button></div>`);
         parts.push(`<label class="row" style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" data-pdf-photo checked> 背景に航空写真を入れる</label>`);
         if (state.pdfError) parts.push(`<p class="small err">${escapeHtml(state.pdfError)}</p>`);
       }
@@ -1041,18 +1047,19 @@ function numField(name: string, label: string, value: number, unit: string, step
 
 function renderTrackStep(state: AppState): string {
   const t = state.track;
+  const kind = state.trackDraft ?? t.source.kind; // 「ファイルを読む」を選んで、まだ読んでいない間は file の入口を出す
   const parts: string[] = [`<div class="track">`];
   parts.push(renderParcelStep(state));
   parts.push(`<h4>伐採範囲の決め方 ${help(HELP.band)}</h4>`);
   parts.push(
     `<select class="wide" data-track-kind>
-      <option value="vehicle" ${t.source.kind === "vehicle" ? "selected" : ""}>架空の軌跡図を作る（車両の寸法から）</option>
-      <option value="file" ${t.source.kind === "file" ? "selected" : ""}>軌跡図のファイルを読む（KML・GeoJSON）</option>
-      <option value="band" ${t.source.kind === "band" ? "selected" : ""}>仮の帯（中心線から一定の幅）</option>
+      <option value="vehicle" ${kind === "vehicle" ? "selected" : ""}>架空の軌跡図を作る（車両の寸法から）</option>
+      <option value="file" ${kind === "file" ? "selected" : ""}>軌跡図のファイルを読む（KML・GeoJSON）</option>
+      <option value="band" ${kind === "band" ? "selected" : ""}>仮の帯（中心線から一定の幅）</option>
     </select>`,
   );
   parts.push(`<form data-track-form>`);
-  if (t.source.kind === "vehicle") {
+  if (t.source.kind === "vehicle" && kind === "vehicle") {
     const v = t.source.vehicle;
     const preset = t.source.preset;
     parts.push(
@@ -1069,11 +1076,12 @@ function renderTrackStep(state: AppState): string {
     for (const f of VEHICLE_FIELDS.filter((f) => !f.main || (f.lifterOnly && preset !== "lifter"))) parts.push(numField(f.key, f.label, v[f.key], f.unit, f.step, f.min, f.max));
     parts.push(`</details>`);
     if (preset === "lifter") parts.push(renderTiltZones(state, t.source.tiltZones));
-  } else if (t.source.kind === "file") {
+  } else if (kind === "file") {
     parts.push(`<div class="dropzone" data-drop>ここに軌跡図（KML・KMZ・GeoJSON）を落とす<br><input type="file" accept=".kml,.kmz,.geojson,.json" data-track-file></div>`);
     parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。座標はこの端末の外へ出しません。</p>`);
-    if (t.source.lines.length) parts.push(`<p>読んだ：<b>${escapeHtml(t.source.name)}</b>（線 ${t.source.lines.length} 本）</p>`);
-  } else {
+    if (t.source.kind === "file" && t.source.lines.length) parts.push(`<p>読んだ：<b>${escapeHtml(t.source.name)}</b>（線 ${t.source.lines.length} 本）</p>`);
+    else if (state.trackDraft) parts.push(`<p class="muted small">まだ読んでいません。読むまでは前の範囲（${t.source.kind === "vehicle" ? "架空の軌跡図" : t.source.kind === "band" ? "仮の帯" : "前のファイル"}）のままです。</p>`);
+  } else if (t.source.kind === "band") {
     parts.push(numField("halfWidth", "中心線から外側まで", t.source.halfWidth, "m", 1, 3, 60));
   }
   if (t.source.kind !== "band") {
@@ -1083,7 +1091,7 @@ function renderTrackStep(state: AppState): string {
   } else {
     parts.push(numField("band.roadHalf", "道路の半幅", t.band.roadHalf, "m", 0.5, 0, 20));
   }
-  parts.push(`<div class="actions"><button class="btn" type="submit">${t.source.kind === "vehicle" ? "架空の軌跡図を作る（数を変えたら）" : "この範囲で拾い直す"}</button></div>`);
+  parts.push(`<div class="actions"><button class="btn" type="submit">${kind === "vehicle" ? "架空の軌跡図を作る（数を変えたら）" : "この範囲で拾い直す"}</button></div>`);
   parts.push(`</form>`);
 
   // 結果
@@ -1112,12 +1120,17 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
   body.querySelector<HTMLSelectElement>("[data-track-kind]")?.addEventListener("change", (e) => {
     const kind = (e.target as HTMLSelectElement).value as TrackSetting["source"]["kind"];
     state.trackError = null;
+    if (kind === "file") {
+      // ファイルを読むまで state.track は置き換えない。空の lines で置き換えると、画面は前の計算結果のまま、
+      // 案件ファイルには空の軌跡が入り、読み戻すと区切りが 0 になった（Codex の指摘 2026-11-04）
+      state.trackDraft = "file";
+      renderStep(state);
+      return;
+    }
+    state.trackDraft = null;
     if (kind === "vehicle") state.track = { ...state.track, source: { kind, preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] } };
-    else if (kind === "file") state.track = { ...state.track, source: { kind, name: "", lines: [] } };
     else state.track = { ...state.track, source: { kind, halfWidth: 13 } };
-    // ファイルはまだ読んでいないので、読むまで前の範囲のまま。車両と帯はすぐ計算する
-    if (kind !== "file") rebuildTrack(state);
-    else renderStep(state);
+    rebuildTrack(state);
   });
   const form = body.querySelector<HTMLFormElement>("[data-track-form]");
   form?.querySelector<HTMLSelectElement>('select[name="preset"]')?.addEventListener("change", (e) => {
@@ -1279,6 +1292,7 @@ async function readTrackFile(state: AppState, f: File) {
     if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
     state.track = { ...state.track, source: { kind: "file", name: f.name, lines } };
     state.trackError = null;
+    state.trackDraft = null;
     rebuildTrack(state); // 覆いの確認（別の道の軌跡図かどうか）は rebuildTrackNow の中。計算が後回しなので、ここで結果は読めない
   } catch (e) {
     state.trackError = (e as Error).message;
@@ -1695,6 +1709,9 @@ async function runJudging(state: AppState) {
   const client = makeClient(key);
   const windows = windowsOf(state.segments);
   state.run = { done: 0, total: windows.length, usd: 0, log: [], cancel: false };
+  // この走りの印。案件や中心線を変えると state.run は別物（null）になるので、戻ってきた答えを捨てられる（Codex の指摘 2026-11-04）
+  const run = state.run;
+  const stale = () => state.run !== run;
   renderStep(state);
   const log = (s: string) => {
     state.run?.log.unshift(s);
@@ -1702,7 +1719,7 @@ async function runJudging(state: AppState) {
   };
 
   const one = async (segs: Segment[], k: number) => {
-    if (state.run?.cancel) return;
+    if (run.cancel || stale()) return;
     const label = `${segs[0].fromM}〜${segs.at(-1)!.toM}m`;
     try {
       const ids = segs.map((s) => s.id).filter((id) => state.judgments.get(id)?.by !== "人");
@@ -1718,11 +1735,13 @@ async function runJudging(state: AppState) {
         second = undefined;
       }
       const main = await judgeWindow(client, model, images, ids, second);
-      if (state.run) state.run.usd += main.usd;
+      if (stale()) return; // 待っている間に案件や中心線が変わった。古い答えは新しい区切りに書かない
+      run.usd += main.usd;
       if (main.refused) {
         log(`!窓 ${k + 1}（${label}）：モデルが答えませんでした`);
       } else {
         for (const j of main.judgments) {
+          if (state.judgments.get(j.segmentId)?.by === "人") continue; // 待っている間に人が直した区切りは上書きしない
           state.judgments.set(j.segmentId, j);
           state.unjudged.delete(j.segmentId);
         }
@@ -1731,40 +1750,54 @@ async function runJudging(state: AppState) {
         if (main.missing.length) log(`!窓 ${k + 1}：答えに無かった番号 ${main.missing.join("・")}（未判定のまま「確かめる所」に入れます）`);
         // 見直すのは確信「低」と、別の年の写真で変化のあった区切り（spec §8.4）
         const lows = main.judgments.filter((j) => j.conf === "低" || isRealChange(j.change)).map((j) => j.segmentId);
-        if (review && lows.length && !state.run?.cancel) {
+        if (review && lows.length && !run.cancel) {
           const rev = await judgeWindow(client, review, images, lows, second);
-          if (state.run) state.run.usd += rev.usd;
+          if (stale()) return;
+          run.usd += rev.usd;
+          let changed = 0;
           for (const j of rev.judgments) {
-            const first = state.judgments.get(j.segmentId)!;
+            const first = state.judgments.get(j.segmentId);
+            if (!first || first.by === "人") continue; // 主の判定が無い（答えに無かった）か、待っている間に人が直した
+            if (j.tree !== first.tree) changed++;
             state.judgments.set(j.segmentId, { ...j, before: { tree: first.tree, conf: first.conf, model: first.model } });
           }
-          const changed = rev.judgments.filter((j) => j.tree !== state.judgments.get(j.segmentId)!.before!.tree).length;
           log(`　見直し ${lows.length} 区切り（${MODELS[review]}）：${changed} 区切りで木の割合が変わりました、${fmtUsd(rev.usd)}`);
         }
       }
     } catch (e) {
       log(`!窓 ${k + 1}（${label}）：${(e as Error).message}`);
     } finally {
-      if (state.run) state.run.done++;
-      refreshJudgments(state);
-      if (state.step === 4) renderStep(state);
+      if (!stale()) {
+        run.done++;
+        refreshJudgments(state);
+        if (state.step === 4) renderStep(state);
+      }
     }
   };
 
   // 同時に 3 窓まで。API の同時の問い合わせの上限と、写真の取り込みの負荷の両方を抑える
   let next = 0;
   const workers = Array.from({ length: Math.min(3, windows.length) }, async () => {
-    while (next < windows.length && !state.run?.cancel) {
+    while (next < windows.length && !run.cancel && !stale()) {
       const k = next++;
       await one(windows[k], k);
     }
   });
   await Promise.all(workers);
-  const total = state.run?.usd ?? 0;
+  if (stale()) return; // 止めた側が片付けている
+  const total = run.usd;
   state.run = null;
   persist(state);
   if (state.step === 4) renderStep(state);
   console.info(`判定おわり：${fmtUsd(total)}`);
+}
+
+/** 走っている判定を止めて捨てる。案件や中心線を変えるとき（古い答えを新しい案件の区切りに書かないため。Codex の指摘 2026-11-04） */
+function cancelRun(state: AppState) {
+  if (!state.run) return;
+  state.run.cancel = true;
+  state.run = null;
+  console.info("案件が変わったので、走っていた判定を止めました");
 }
 
 /** 判定が変わったとき、地図の色・一覧・詳細を合わせる */
@@ -2273,14 +2306,21 @@ async function loadForest(state: AppState) {
   try {
     const r = await fetchForest(bbox);
     if (state.dense !== dense) return; // 読んでいる間に中心線が変わった
-    state.forestIndex = new ForestIndex(r.polygons);
-    recomputeForest(state);
-    // 点線（確かめる所）に食い違いを反映する
-    state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments, state.forestFlags);
-    setSourceData(state.map, "segments", state.segmentsGeo);
-    const asOf = r.polygons.find((p) => p.asOf)?.asOf ?? "";
-    state.forestNote = r.failed ? `森林の区域：タイル ${r.tiles} 枚のうち ${r.failed} 枚を読めませんでした` : `森林の区域：林野庁（データ時点 ${asOf}）`;
-    console.info(`${state.forestNote}。多角形 ${r.polygons.length}`);
+    if (r.failed) {
+      // 1 枚でも読めなければ区域は「未取得」のまま。欠けたタイルの筆が「区域外」と出て、CSV・KML にも確定した値として
+      // 入ってしまう（Codex の指摘 2026-11-04）。列は空のまま、読み直しは案件を開き直して
+      state.forestNote = `森林の区域：タイル ${r.tiles} 枚のうち ${r.failed} 枚を読めませんでした（区域の列は空のまま。通信を確かめて、ページを開き直すと読み直します）`;
+      console.warn(state.forestNote);
+    } else {
+      state.forestIndex = new ForestIndex(r.polygons);
+      recomputeForest(state);
+      // 点線（確かめる所）に食い違いを反映する
+      state.segmentsGeo = applyJudgments(segmentsToGeoJSON(state.segments), state.judgments, state.forestFlags);
+      setSourceData(state.map, "segments", state.segmentsGeo);
+      const asOf = r.polygons.find((p) => p.asOf)?.asOf ?? "";
+      state.forestNote = `森林の区域：林野庁（データ時点 ${asOf}）`;
+      console.info(`${state.forestNote}。多角形 ${r.polygons.length}`);
+    }
   } catch (e) {
     if (state.dense !== dense) return;
     state.forestNote = `森林の区域を読めませんでした：${(e as Error).message}`;
@@ -2354,10 +2394,11 @@ function walkMapInput(state: AppState, withPhoto: boolean): WalkMapInput {
 async function exportWalkMap(state: AppState, withPhoto: boolean) {
   if (state.pdfRun) return;
   state.pdfError = null;
-  state.pdfRun = { done: 0, total: pagesOf(state.segments).length + 1 };
+  const input = walkMapInput(state, withPhoto);
+  state.pdfRun = { done: 0, total: walkMapPageCount(input) };
   renderStep(state);
   try {
-    const blob = await buildWalkMap(walkMapInput(state, withPhoto), (done, total) => {
+    const blob = await buildWalkMap(input, (done, total) => {
       state.pdfRun = { done, total };
       if (state.step === 7) renderStep(state);
     });

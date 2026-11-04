@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildProject, describeProject, mojAttribution, parseProject, projectFileName, PROJECT_VERSION, type ProjectFile } from "./project";
 import { toPlaneZone } from "./proj";
 import { DEFAULT_TRACK } from "./trackstate";
+import { PRESETS } from "./vehicle";
 
 const DEMO = { coords: [[137.991895, 36.644648], [137.98698, 36.650153]] as [number, number][], roadName: "小川長野線" };
 
@@ -136,5 +137,27 @@ describe("長い道の案件（起点から 10km を超えると区切りの番�
     expect(r.notes[0].segmentId).toBe("R1234");
     expect(r.unjudged).toEqual(["L999", "R1000"]);
     expect(() => parseProject(JSON.stringify({ ...p, unjudged: ["L12"] }), DEMO)).toThrow(/未判定/);
+  });
+});
+
+describe("伐採範囲の決め方の数（Codex の指摘 2026-11-04：文字が入ると画面に HTML として出た）", () => {
+  const base = made();
+  const withSource = (source: object) => JSON.stringify({ ...base, track: { ...base.track, source } });
+  it("起立の区間に数でない値や範囲の外があれば断る", () => {
+    expect(() => parseProject(withSource({ kind: "vehicle", preset: "lifter", tiltZones: [{ fromM: 100000, toM: 100010, tilt: "<img src=x onerror=alert(1)>" }] }), DEMO)).toThrow(/起立の区間/);
+    expect(() => parseProject(withSource({ kind: "vehicle", preset: "lifter", tiltZones: [{ fromM: 20, toM: 10, tilt: 60 }] }), DEMO)).toThrow(/起立の区間/);
+    expect(() => parseProject(withSource({ kind: "vehicle", preset: "lifter", tiltZones: "<x>" }), DEMO)).not.toThrow(); // 配列でなければ空にする（前からの扱い）
+  });
+  it("車両の寸法に文字があれば断り、無ければ型の値で埋める。知らない項目は落とす", () => {
+    expect(() => parseProject(withSource({ kind: "vehicle", preset: "lifter", vehicle: { tractorWidth: "<x>" } }), DEMO)).toThrow(/車両の寸法/);
+    const p = parseProject(withSource({ kind: "vehicle", preset: "lifter", tiltZones: [], vehicle: { tractorWidth: 3, extra: "<x>" } }), DEMO);
+    if (p.track.source.kind !== "vehicle") throw new Error("vehicle のはず");
+    expect(p.track.source.vehicle.tractorWidth).toBe(3);
+    expect(p.track.source.vehicle.tractorWheelbase).toBe(PRESETS.lifter.vehicle.tractorWheelbase);
+    expect("extra" in p.track.source.vehicle).toBe(false);
+  });
+  it("仮の帯の幅が数でなければ断る", () => {
+    expect(() => parseProject(withSource({ kind: "band", halfWidth: "13" }), DEMO)).toThrow(/仮の帯/);
+    expect(parseProject(withSource({ kind: "band", halfWidth: 13 }), DEMO).track.source.kind).toBe("band");
   });
 });

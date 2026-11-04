@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildSegments, leftNormals, resample } from "./geom";
 import type { EN } from "./proj";
 import type { Judgment } from "./types";
-import { checkRows, fitFrame, type WalkMapInput } from "./walkmap";
+import { checkRows, fitFrame, rowChunks, walkMapPageCount, type WalkMapInput } from "./walkmap";
 
 describe("持って歩く地図：表に出す区切り", () => {
   const dense = resample([[0, 0], [40, 0]] as EN[], 1);
@@ -44,5 +44,27 @@ describe("持って歩く地図：枠に収める", () => {
     const f = fitFrame({ x: 0, y: 0, w: 100, h: 50 }, [0, 0, 100, 400], 36.6);
     expect(f.scale).toBe(1); // 400 / 400
     expect(f.minX).toBe(-350);
+  });
+});
+
+describe("持って歩く地図：表の行が多いとき（Codex の指摘 2026-11-04：表が 310mm になり地図の枠が潰れた）", () => {
+  it("14 行までは地図のページ、残りは 30 行ずつ続きのページ", () => {
+    const n = (k: number) => Array.from({ length: k }, (_, i) => i);
+    expect(rowChunks(n(0)).map((c) => c.length)).toEqual([0]);
+    expect(rowChunks(n(14)).map((c) => c.length)).toEqual([14]);
+    expect(rowChunks(n(40)).map((c) => c.length)).toEqual([14, 26]);
+    expect(rowChunks(n(50)).map((c) => c.length)).toEqual([14, 30, 6]);
+  });
+  it("200m の全区切り（40）に記録があると、ページは 索引 1 ＋ 地図 1 ＋ 続き 1", () => {
+    const dense = resample([[0, 0], [200, 0]] as EN[], 1);
+    const normals = leftNormals(dense);
+    const segs = buildSegments(dense, normals, { step: 10, roadHalf: 3, bandOut: 10 });
+    expect(segs.length).toBe(40);
+    const notes = new Map(segs.map((s) => [s.id, { segmentId: s.id, result: "○" as const, memo: "", at: "" }]));
+    const input: WalkMapInput = {
+      title: "t", roadName: "r", dense, normals, segments: segs, parcels: [], hits: [], judgments: new Map(), kps: [], sweep: null, outer: null, tiltZones: [], trackText: "", withPhoto: false, forest: null, forestFlags: null, notes,
+    };
+    expect(walkMapPageCount(input)).toBe(3);
+    expect(walkMapPageCount({ ...input, notes: new Map() })).toBe(2);
   });
 });

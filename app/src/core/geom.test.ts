@@ -105,3 +105,25 @@ describe("長い道の区切りの番号", () => {
     expect(ids.every((id) => /^[LR]\d{3,}$/.test(id))).toBe(true);
   });
 });
+
+describe("終端の余り（Codex の指摘 2026-11-04）", () => {
+  it("101m の直線は最後の 1m も区切りに入る（前の区切りに合わさって 90〜101m）", () => {
+    const dense = resample([[0, 0], [101, 0]] as EN[], 1);
+    const segs = buildSegments(dense, leftNormals(dense));
+    const left = segs.filter((s) => s.side === "L");
+    expect(left.length).toBe(10);
+    expect([left.at(-1)!.fromM, left.at(-1)!.toM]).toEqual([90, 101]);
+  });
+  it("100m ちょうどなら 10 個のまま、終わりは 100m", () => {
+    const dense = resample([[0, 0], [100, 0]] as EN[], 1);
+    const left = buildSegments(dense, leftNormals(dense)).filter((s) => s.side === "L");
+    expect(left.length).toBe(10);
+    expect(left.at(-1)!.toM).toBe(100);
+  });
+  it("104m なら余りの 4m は独立した区切り（3m 以上は残す）", () => {
+    const dense = resample([[0, 0], [104, 0]] as EN[], 1);
+    const left = buildSegments(dense, leftNormals(dense)).filter((s) => s.side === "L");
+    expect(left.length).toBe(11);
+    expect([left.at(-1)!.fromM, left.at(-1)!.toM]).toEqual([100, 104]);
+  });
+});

@@ -78,3 +78,18 @@ describe("軌跡図の書き出しと読み込み", () => {
     expect(() => parseTrackFile("a.txt", "hello")).toThrow(/KML でも GeoJSON でも/);
   });
 });
+
+describe("長い辺の軌跡図（Codex の指摘 2026-11-04）", () => {
+  it("200m の直線を両端 2 点で表した縁でも、全長で幅が取れる（辺の所属を真ん中の 1 点で決めていて両端 40m が抜けた）", () => {
+    const dense = resample([[0, 0], [200, 0]] as EN[], 1);
+    const normals = leftNormals(dense);
+    const sw = sweepFromLines(dense, normals, [
+      [[0, 6], [200, 6]],
+      [[0, -6], [200, -6]],
+    ]);
+    for (const s of [0, 10, 39, 100, 161, 190, 200]) {
+      expect(Math.abs(sw.left[s] - 6)).toBeLessThan(1e-6);
+      expect(Math.abs(sw.right[s] - 6)).toBeLessThan(1e-6);
+    }
+  });
+});

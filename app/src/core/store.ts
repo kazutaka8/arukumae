@@ -39,14 +39,17 @@ function request<T>(r: IDBRequest<T>): Promise<T> {
   });
 }
 
-/** 残してある案件（形は検めない。読んだあと parseProject 相当の検めを通す）。IndexedDB に無ければ localStorage も見る（書く側の落とし先） */
+/**
+ * 残してある案件（形は検めない。読んだあと parseProject 相当の検めを通す）。
+ * IndexedDB と localStorage（書く側の落とし先）の両方を見て、保存の日時が新しいほうを返す（newerOf）
+ */
 export async function loadStored(): Promise<unknown | null> {
+  let fromDb: unknown = null;
   if (hasIdb()) {
     try {
       const db = await openDb();
       try {
-        const v = await request(db.transaction(STORE, "readonly").objectStore(STORE).get(KEY));
-        if (v) return v;
+        fromDb = (await request(db.transaction(STORE, "readonly").objectStore(STORE).get(KEY))) ?? null;
       } finally {
         db.close();
       }
@@ -54,12 +57,25 @@ export async function loadStored(): Promise<unknown | null> {
       console.warn("IndexedDB から読めませんでした。localStorage を見ます", e);
     }
   }
+  let fromLs: unknown = null;
   try {
     const raw = localStorage.getItem(FALLBACK_KEY);
-    return raw ? (JSON.parse(raw) as unknown) : null;
+    fromLs = raw ? (JSON.parse(raw) as unknown) : null;
   } catch {
-    return null;
+    fromLs = null;
   }
+  return newerOf(fromDb, fromLs);
+}
+
+/**
+ * 2 つの置き場の両方に案件があれば、保存の日時（savedAt、ISO 文字列）が新しいほう。
+ * IndexedDB に書けず localStorage に落とした次の起動で、古い IndexedDB の記録に戻ってしまった（Codex の指摘 2026-11-04）
+ */
+export function newerOf(a: unknown, b: unknown): unknown | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  const at = (v: unknown): string => (typeof v === "object" && v !== null && typeof (v as { savedAt?: unknown }).savedAt === "string" ? (v as { savedAt: string }).savedAt : "");
+  return at(b) > at(a) ? b : a;
 }
 
 /**
@@ -78,6 +94,12 @@ export async function saveStored(project: unknown): Promise<void> {
           tx.onerror = () => reject(tx.error ?? new Error("IndexedDB に書けませんでした"));
           tx.onabort = () => reject(tx.error ?? new Error("IndexedDB への書き込みが中断されました"));
         });
+        // 落とし先に古い案件が残っていれば消す（次に読むときに新旧を比べる手間と迷いを減らす）
+        try {
+          localStorage.removeItem(FALLBACK_KEY);
+        } catch {
+          /* 使えない環境なら何もしない */
+        }
         return;
       } finally {
         db.close();
