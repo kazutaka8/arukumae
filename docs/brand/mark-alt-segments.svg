@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- D を詰めた：道に沿って 3 つの区切り（黄 → 橙 → 赤）。道は太く、区切りは道の外側に等間隔 -->
-  <rect width="64" height="64" rx="14" fill="#1d232a"/>
-  <path d="M10 60 C 10 44 18 36 30 30 S 50 18 58 6" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
-  <path d="M17 40 l10 -5 l4 8 l-10 5 z" fill="#ffd600"/>
-  <path d="M29 34 l10 -5 l4 8 l-10 5 z" fill="#ff9800"/>
-  <path d="M41 26 l9 -7 l5 7 l-9 7 z" fill="#e53935"/>
-</svg>

@@ -34,7 +34,7 @@ export function buildLayout(root: HTMLElement) {
   root.innerHTML = `
     <header class="topbar">
       <button class="icon-btn" id="toggle-steps" title="手順を開く・閉じる" aria-label="手順">☰</button>
-      <div class="brand">アルクマエ</div>
+      <div class="brand"><img class="brand-mark" src="./favicon.svg" alt="" width="20" height="20">アルクマエ</div>
       <div class="project" id="project-name">小川村 県道401号（見本）</div>
       <div class="spacer"></div>
       <div class="save-state" id="save-state">見本のデータ。判定はこの端末に残ります</div>
