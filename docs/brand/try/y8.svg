@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="アルクマエ：ブレードの軌跡図">
+<rect width="64" height="64" rx="14" fill="#121417"/><clipPath id="c"><rect width="64" height="64" rx="14"/></clipPath><g clip-path="url(#c)">
+<path d="M0 0 V64 M0 0 H64 M8 0 V64 M0 8 H64 M16 0 V64 M0 16 H64 M24 0 V64 M0 24 H64 M32 0 V64 M0 32 H64 M40 0 V64 M0 40 H64 M48 0 V64 M0 48 H64 M56 0 V64 M0 56 H64 M64 0 V64 M0 64 H64" stroke="#ffffff" stroke-opacity="0.1" stroke-width="0.5" fill="none"/>
+<path d="M27.83 42.18 A11.0 11.0 0 1 0 30.52 21.10 L57.11 17.50 A29.00 29.00 0 1 1 3.00 32.00 Z" fill="#ffffff" fill-opacity="0.07"/>
+<path d="M3.00 32.00 A29.00 29.00 0 1 0 57.11 17.50" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linecap="round"/>
+<path d="M27.83 42.18 A11.0 11.0 0 1 0 30.52 21.10" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="0.6" stroke-dasharray="1.4 1.4"/>
+<path d="M28.40 40.79 L3.13 31.68 L2.87 32.32 L27.26 43.57 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M32.17 41.50 L5.37 43.14 L5.38 43.84 L32.23 44.50 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M35.92 40.65 L11.95 52.78 L12.24 53.41 L37.16 43.39 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M39.03 38.39 L21.82 59.02 L22.34 59.49 L41.25 40.41 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M40.98 35.09 L33.36 60.84 L34.02 61.06 L43.82 36.06 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M41.47 31.28 L44.67 57.94 L45.36 57.89 L44.46 31.05 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M40.41 27.58 L53.91 50.80 L54.53 50.48 L43.07 26.19 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M37.97 24.61 L59.56 40.59 L60.00 40.05 L39.86 22.28 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M34.56 22.85 L60.71 28.97 L60.90 28.30 L35.37 19.96 Z" fill="none" stroke="#ffffff" stroke-width="0.8" stroke-linejoin="round"/>
+<path d="M30.73 22.59 L57.16 17.85 L57.07 17.15 L30.32 19.61 Z" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linejoin="round"/>
+</g></svg>
