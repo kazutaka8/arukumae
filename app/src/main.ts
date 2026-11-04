@@ -555,10 +555,12 @@ function renderStep(state: AppState) {
       const kinds = countKinds(state);
       if (!state.parcels.length) parts.push(`<p class="err">公図がまだありません。手順 2 で公図を取得するか、地図XML の zip を落としてください。</p>`);
       parts.push(tiles([{ label: "かかる筆", value: state.hits.length, unit: "筆" }, { label: "うち民有林の区域", value: state.forest ? forestCount(state).minyu : "…", unit: state.forest ? "筆" : "", tone: "ok" }, { label: "区切り", value: state.segments.length }]));
-      parts.push(`<p>伐採範囲 ${help(HELP.band)} にかかる筆（${kinds}）。地図の濃い黄色が、筆のうち伐採範囲と重なる部分です。右の一覧の行を押すと、地図がそこへ飛びます。</p>`);
-      parts.push(`<p>${forestSummary(state)} ${help(HELP.forest)}</p>`);
-      parts.push(`<div class="next">漏れを出さないため、ここは AI ではなく計算で決めています。「地区外」「別図」は隣の地図を指す印なので数えていません。</div>`);
+      parts.push(`<p>伐採範囲 ${help(HELP.band)} にかかる筆（${kinds}）。濃い黄色がかかる部分。一覧の行を押すと地図が飛びます。</p>`);
       parts.push(`<div class="actions"><button class="btn primary next" data-go="4">次へ：木を判定する</button></div>`);
+      parts.push(about(
+        `<p>${forestSummary(state)} ${help(HELP.forest)}</p>`,
+        `<p>漏れを出さないため、ここは AI ではなく計算で決めています。筆を丸ごと塗らず、伐採範囲と重なる部分だけを塗ります。「地区外」「別図」は隣の地図を指す印なので数えていません。</p>`,
+      ));
       showListTab("hits");
       break;
     }
@@ -573,7 +575,7 @@ function renderStep(state: AppState) {
       const noneN = lows.filter((c) => c.kind === "未判定").length;
       const seen = countNotes(state.notes, lows.map((l) => l.segmentId));
       parts.push(tiles([{ label: "確かめる所", value: lows.length, tone: "warn" }, { label: "現地で見た", value: seen.checksDone, unit: `/ ${lows.length}` }, { label: "現地 ×", value: seen.byResult["×"], tone: seen.byResult["×"] ? "warn" : undefined }]));
-      parts.push(`<p>確かめる所 ${help(HELP.check)} の内訳：確信が低い ${lows.length - forestN - changeN - noneN}・森林の区域と食い違う ${forestN}${changeN ? `・別の年の写真と比べて変化 ${changeN} ${help(HELP.change)}` : ""}${noneN ? `・未判定 ${noneN}` : ""}。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}右の一覧にも並んでいます。</p>`);
+      parts.push(`<p>確かめる所 ${help(HELP.check)}：確信が低い ${lows.length - forestN - changeN - noneN}・森林と食い違う ${forestN}${changeN ? `・変化 ${changeN}` : ""}${noneN ? `・未判定 ${noneN}` : ""}。一覧の行か「次 →」で順に見ます。</p>`);
       // 前へ・次へは、一覧で絞り込んだ中を回る。現地で「まだ見ていない所」だけを順に回れるように
       const vis = visibleChecks(state);
       const narrowed = vis.length !== lows.length ? `（絞り込み ${help(HELP.filter)}）` : "";
@@ -581,16 +583,19 @@ function renderStep(state: AppState) {
       parts.push(`<div class="nav"><button class="btn" data-prev-low ${vis.length ? "" : "disabled"}>← 前</button><span class="pos">${pos}</span><button class="btn" data-next-low ${vis.length ? "" : "disabled"}>次 →</button></div>`);
       {
         const c = countNotes(state.notes, lows.map((l) => l.segmentId));
-        parts.push(`<p class="small">現地の記録 ${help(HELP.notes)}：確かめる所 ${lows.length} のうち <b>${c.checksDone}</b> を見た（○ ${c.byResult["○"]}・△ ${c.byResult["△"]}・× ${c.byResult["×"]}。ほかの区切りも含めて ${c.total} 件）。${c.byResult["×"] ? "× の区切りは「この区切りを直す」で判定を直してください。" : ""}</p>`);
-        if (c.total) parts.push(`<div class="row btns"><button class="btn small" data-clear-notes>現地の記録を全部消す</button></div>`);
+        if (c.total) parts.push(`<div class="row btns"><button class="btn small ghost" data-clear-notes>現地の記録を全部消す（${c.total} 件）</button></div>`);
       }
       parts.push(`<div class="actions"><button class="btn primary next" data-go="6">次へ：KP</button></div>`);
+      parts.push(about(
+        `<p>確かめる所は 4 種類：Claude の確信が「低」、森林の区域（林野庁）と判定が食い違う、別の年の写真と比べて変化があった ${help(HELP.change)}、答えに番号がなく未判定。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}</p>`,
+        `<p>机で直すなら区切りの詳細の「この区切りを直す」。現地で見たことは「現地の記録」（○△×とメモ） ${help(HELP.notes)}。× の区切りは帰ってから直します。</p>`,
+      ));
       showListTab("checks");
       break;
     }
     case 6: {
       const marks = [...state.kps].sort((a, b) => a.atM - b.atM);
-      parts.push(`<p>読んだ距離標 ${help(HELP.kp)} を地図に置くと、全部の区切りと筆に「${escapeHtml(state.roadName || "道路名")} ○.○○km 付近（推定）」が付きます。2 本以上要ります。</p>`);
+      parts.push(`<p>距離標 ${help(HELP.kp)} を 2 本以上置くと、全部の区切りと筆に KP（推定）が付きます。</p>`);
       parts.push(
         `<div class="actions"><button class="btn ${state.placingKp ? "" : "primary"}" data-place-kp>${state.placingKp ? "やめる（地図を押すと距離標が入ります）" : "地図を押して距離標を置く"}</button></div>`,
       );
@@ -610,30 +615,35 @@ function renderStep(state: AppState) {
       } else if (marks.length === 1) {
         parts.push(`<div class="next">あと 1 本置くと、補間できます。</div>`);
       }
-      parts.push(`<p class="muted small">ストリートビューは人が見て読むだけにしています（画像を取り込んだり Claude に読ませたりはしません）。距離標と実際の距離は改築などでずれていることがあります。</p>`);
       parts.push(`<div class="actions"><button class="btn next" data-go="7">次へ：書き出し</button></div>`);
+      parts.push(about(
+        `<p>地図を押して置いた所を中心線に投影し、距離標の間を直線で補間します。外側は外挿と書きます。「${escapeHtml(state.roadName || "道路名")} ○.○○km 付近（推定）」の形で一覧と書き出しに出ます。</p>`,
+        `<p>ストリートビューは人が見て読むだけにしています（画像を取り込んだり Claude に読ませたりはしません）。距離標と実際の距離は改築などでずれていることがあります。</p>`,
+      ));
       break;
     }
     case 7: {
       const noKp = state.kps.length < 2;
       const judged = state.judgments.size;
       parts.push(tiles([{ label: "一覧表の行（筆）", value: state.hits.length }, { label: "判定のない区切り", value: state.segments.length - judged, tone: judged < state.segments.length ? "warn" : "ok" }, { label: "距離標", value: state.kps.length, unit: "本", tone: noKp ? "warn" : "ok" }]));
-      parts.push(`<p>${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : "全部の行に KP（推定）が付きます。"}${judged < state.segments.length ? `判定のない区切りの分の木の面積は数えません。` : ""}</p>`);
-      parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV。Excel でそのまま開けます）</button></div>`);
-      parts.push(`<p class="muted small">列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・現地の記録・決めたのは・森林の区域・伐採の届出の目印・備考。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`);
-      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">公図を買うリスト ${help(HELP.buylist)}</h4>`);
-      parts.push(`<div class="actions"><button class="btn" data-buy-csv>所在・地番のリストを書き出す（CSV）</button></div>`);
-      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">現地マップ（Google Earth など） ${help(HELP.fieldmap)}</h4>`);
-      parts.push(`<div class="row btns" style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" data-field="kml">KML で書き出す</button><button class="btn" data-field="geojson">GeoJSON で書き出す</button></div>`);
-      parts.push(`<p class="muted small">かかる筆（かかる部分の形と吹き出し）・区切り（判定の色）・現地で確かめる所の印・中心線と 100m ごとの点・距離標・伐採範囲の外側。iPad の Google Earth に入れると、現地を歩くときの地図になります。</p>`);
-      parts.push(`<h4 class="muted small" style="margin:12px 0 4px">持って歩く地図（PDF） ${help(HELP.walkmap)}</h4>`);
+      parts.push(`<p>${noKp ? "距離標が 2 本未満なので KP の列は空になります。" : ""}${judged < state.segments.length ? `判定のない区切りの分の木の面積は数えません。` : ""}</p>`);
+      parts.push(`<h4>一覧表（Excel）</h4>`);
+      parts.push(`<div class="actions"><button class="btn primary" data-csv>一覧表を書き出す（CSV）</button><button class="btn" data-buy-csv>公図を買うリスト（CSV） ${help(HELP.buylist)}</button></div>`);
+      parts.push(`<h4>現地マップ（Google Earth など） ${help(HELP.fieldmap)}</h4>`);
+      parts.push(`<div class="row btns"><button class="btn" data-field="kml">KML</button><button class="btn" data-field="geojson">GeoJSON</button></div>`);
+      parts.push(`<h4>持って歩く地図（PDF） ${help(HELP.walkmap)}</h4>`);
       if (state.pdfRun) {
         parts.push(`<div class="progress"><i style="width:${(100 * state.pdfRun.done) / state.pdfRun.total}%"></i></div><p class="small">${state.pdfRun.done} / ${state.pdfRun.total} ページを描いています…</p>`);
       } else {
-        parts.push(`<div class="actions"><button class="btn" data-pdf>持って歩く地図を書き出す（PDF、A4 ${pagesOf(state.segments).length + 1} ページ）</button></div>`);
-        parts.push(`<label class="row" style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" data-pdf-photo checked> 背景に航空写真を入れる（外すと線と色だけ）</label>`);
-        if (state.pdfError) parts.push(`<p class="small" style="color:#c62828">${escapeHtml(state.pdfError)}</p>`);
+        parts.push(`<div class="actions"><button class="btn" data-pdf>PDF（A4 ${pagesOf(state.segments).length + 1} ページ）</button></div>`);
+        parts.push(`<label class="row" style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" data-pdf-photo checked> 背景に航空写真を入れる</label>`);
+        if (state.pdfError) parts.push(`<p class="small err">${escapeHtml(state.pdfError)}</p>`);
       }
+      parts.push(about(
+        `<p>一覧表の列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・現地の記録・決めたのは・森林の区域・伐採の届出の目印・備考。UTF-8（BOM）なので Excel がそのまま開けます。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`,
+        `<p>現地マップ：かかる筆（かかる部分の形と吹き出し）・区切り（判定の色）・確かめる所の印・中心線と 100m ごとの点・距離標・伐採範囲の外側。iPad の Google Earth に入れると、現地を歩くときの地図になります。</p>`,
+        `<p>持って歩く地図：索引図＋約 200m ずつのページ。航空写真を外すと線と色だけになります。</p>`,
+      ));
       showListTab("hits");
       break;
     }
@@ -725,7 +735,7 @@ function renderProjectStep(state: AppState): string {
 
   // 中心線を決める：3 つの出どころ
   parts.push(`<details class="center" ${demo && !state.lineChoices && !state.drawing && !state.osmPick ? "" : "open"}><summary><b>自前の道で動かす：中心線を決める</b></summary>`);
-  parts.push(`<p class="muted small">運送会社の軌跡図（KML・KMZ・GeoJSON）があればその中の線を、無ければ OpenStreetMap の道路をたどるか、航空写真の上に手で描きます。中心線を変えると、判定・距離標・記録は作り直しです（先に案件ファイルに保存できます）。</p>`);
+  parts.push(`<p class="muted small">軌跡図の線を選ぶ／OpenStreetMap の道路をたどる／手で描く。中心線を変えると判定・距離標・記録は作り直し（先に案件ファイルへ保存できます）。</p>`);
 
   // (a) 軌跡図の KML から選ぶ
   parts.push(`<h4>(a) 軌跡図のファイルの線から選ぶ</h4>`);
@@ -762,13 +772,15 @@ function renderProjectStep(state: AppState): string {
   }
   parts.push(`</details>`);
 
-  parts.push(`<h4 class="muted small" style="margin:12px 0 4px">案件ファイル ${help(HELP.project)}</h4>`);
-  parts.push(`<div class="actions"><button class="btn" data-project-save>案件を保存する（JSON）</button></div>`);
-  parts.push(`<div class="dropzone" data-project-drop>ここに案件ファイル（.json）を落とすと、別の端末の続きができます<br><input type="file" accept=".json,application/json" data-project-file></div>`);
-  parts.push(`<p class="muted small">中身は、この端末に残しているものと同じです（中心線・伐採範囲の決め方・読み込んだ公図の筆・判定・距離標・現地の記録）。読み込むと、この端末のものはファイルの中身に置き換わります。</p>`);
-  if (!demo) parts.push(`<div class="actions"><button class="btn" data-demo-reset>見本（小川村 県道401号）に戻す</button></div>`);
-  parts.push(`<div class="next">次は、公図と軌跡図を取り込みます。公図は市町村から自動で取得できます（法務省の地図XML の zip を落としても構いません）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</div>`);
+  parts.push(`<h4>案件ファイル ${help(HELP.project)}</h4>`);
+  parts.push(`<div class="row btns"><button class="btn" data-project-save>保存する（JSON）</button>${demo ? "" : `<button class="btn ghost" data-demo-reset>見本に戻す</button>`}</div>`);
+  parts.push(`<div class="dropzone" data-project-drop>案件ファイル（.json）を落とすと、別の端末の続きができます<br><input type="file" accept=".json,application/json" data-project-file></div>`);
   parts.push(`<div class="actions"><button class="btn primary next" data-go="2">次へ：取り込み</button></div>`);
+  parts.push(about(
+    `<p>案件 = 名前・道路名・中心線・伐採範囲の決め方・公図の筆・判定・距離標・現地の記録。この端末に 1 つだけ残ります（置き換えは丸ごと書いてから古いものを消すので、途中で失敗しても前の案件が残ります）。</p>`,
+    `<p>案件ファイルは、この端末に残しているものと同じ中身の JSON です。事務所の PC で判定して保存し、iPad に送って読み込めば続きができます。軌跡図の座標が入るので手元に置くファイルで、道具が外へ送ることはありません。</p>`,
+    `<p>次の手順では、公図と軌跡図を取り込みます。公図は市町村から自動で取得できます（法務省の地図XML の zip を落としても構いません）。軌跡図は KML・KMZ・GeoJSON を落とすか、車両の寸法から架空のものを作ります。</p>`,
+  ));
   return parts.join("");
 }
 
@@ -1048,7 +1060,7 @@ function renderTrackStep(state: AppState): string {
         .map((k) => `<option value="${k}" ${k === preset ? "selected" : ""}>${PRESETS[k].name}</option>`)
         .join("")}</select>`,
     );
-    parts.push(`<p class="muted small">${PRESETS[preset].note}。${help(HELP.vehicle)}</p>`);
+    parts.push(`<p class="muted small">${PRESETS[preset].note}</p>`);
     for (const f of VEHICLE_FIELDS.filter((f) => f.main && (!f.lifterOnly || preset === "lifter"))) parts.push(numField(f.key, f.label, v[f.key], f.unit, f.step, f.min, f.max));
     parts.push(
       `<p class="muted small">水平の投影 ${bladeHorizontal(v).toFixed(1)}m（長さ × cos 角度）。ブレードの先は台車の軸の ${(v.bladeRootAt + bladeHorizontal(v) - v.kingpinToAxle).toFixed(1)}m 後ろ。</p>`,
@@ -1059,13 +1071,13 @@ function renderTrackStep(state: AppState): string {
     if (preset === "lifter") parts.push(renderTiltZones(state, t.source.tiltZones));
   } else if (t.source.kind === "file") {
     parts.push(`<div class="dropzone" data-drop>ここに軌跡図（KML・KMZ・GeoJSON）を落とす<br><input type="file" accept=".kml,.kmz,.geojson,.json" data-track-file></div>`);
-    parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。外側線・内側線・多角形のどれでも構いません。座標はこの端末の外へ出しません。</p>`);
+    parts.push(`<p class="muted small">線と多角形の縁を全部読み、中心線に投影して左右の幅にします。座標はこの端末の外へ出しません。</p>`);
     if (t.source.lines.length) parts.push(`<p>読んだ：<b>${escapeHtml(t.source.name)}</b>（線 ${t.source.lines.length} 本）</p>`);
   } else {
     parts.push(numField("halfWidth", "中心線から外側まで", t.source.halfWidth, "m", 1, 3, 60));
   }
   if (t.source.kind !== "band") {
-    parts.push(`<details ${t.source.kind === "file" ? "open" : ""}><summary>余裕幅と伐採の幅</summary>`);
+    parts.push(`<details><summary>余裕幅と伐採の幅（直線 ${t.band.marginStraight}・カーブ ${t.band.marginCurve}・伐採 ${t.band.cut}m）</summary>`);
     for (const f of BAND_FIELDS) parts.push(numField(`band.${f.key}`, f.label, t.band[f.key], "m", 0.5, 0, 20));
     parts.push(`</details>`);
   } else {
@@ -1083,13 +1095,15 @@ function renderTrackStep(state: AppState): string {
   parts.push(`いま：${escapeHtml(describeTrack(t))}<br>`);
   if (t.source.kind !== "band") parts.push(`掃く幅の最大：左 ${mx.left.toFixed(1)}m・右 ${mx.right.toFixed(1)}m<br>`);
   parts.push(`区切り ${r.segments.length}、かかる筆 <b>${state.hits.length}</b>`);
-  if (judged) parts.push(`<br><span class="muted small">判定 ${judged} 区切りはそのまま残しています。範囲を変えたあとは、手順 4 で判定し直すのが確実です。</span>`);
+  if (judged) parts.push(`<br><span class="muted small">判定 ${judged} 区切りは残しています。範囲を変えたら手順 4 で判定し直すのが確実です。</span>`);
   parts.push(`</div>`);
-  if (t.source.kind !== "band") {
-    parts.push(`<div class="row btns"><button class="btn small" data-save-track="kml">KML で保存</button><button class="btn small" data-save-track="geojson">GeoJSON で保存</button></div>`);
-    parts.push(`<p class="muted small">${t.source.kind === "vehicle" ? "架空の軌跡図です。本物は運送会社が専用のソフトで描きます。打ち合わせの叩き台や、軌跡図が届く前の下調べに。" : "読んだ軌跡図を、この道具の形（掃く範囲と伐採範囲の外側）で書き出します。"}</p>`);
-  }
+  if (t.source.kind !== "band") parts.push(`<div class="row btns"><button class="btn small ghost" data-save-track="kml">軌跡を KML で保存</button><button class="btn small ghost" data-save-track="geojson">GeoJSON</button></div>`);
   parts.push(`<div class="actions"><button class="btn next" data-go="3">次へ：かかる筆を見る</button></div>`);
+  parts.push(about(
+    `<p>伐採範囲 = 掃く範囲（軌跡図、または車両の寸法から計算した架空の軌跡図）＋余裕幅（直線・カーブ）＋伐採の幅。道路の端（中心線から道路の半幅）より外の部分だけを区切りにします ${help(HELP.band)}。</p>`,
+    `<p>架空の軌跡図は、前軸が中心線をたどり、キングピンと台車の軸がそれを追う計算です ${help(HELP.vehicle)}。多軸台車は後輪も操舵するので、実際の切れ込みはこれより小さいことが多く、ここでは広め（安全側）に出ます。本物の軌跡図は運送会社が専用のソフトで描きます。</p>`,
+    `<p>起立の区間 ${help(HELP.tiltZone)}：ブレードを立てられる所と角度を場所ごとに決めます。電線をくぐる所では立てられません。</p>`,
+  ));
   parts.push(`</div>`);
   return parts.join("");
 }
@@ -1302,9 +1316,8 @@ function renderParcelStep(state: AppState): string {
     parts.push(renderFetch(state, fr));
   } else {
     parts.push(`<div class="actions"><button class="btn primary" data-fetch-start>公図を自動で取得する</button></div>`);
-    parts.push(`<p class="muted small">中心線が通る市町村を調べ、法務省の地図データを探して取得します ${help(HELP.mojfetch)}</p>`);
     parts.push(`<label class="field"><span>残す幅（中心線の両側）</span><select name="parcelBuffer" data-parcel-buffer>${[200, 500, 1000].map((b) => `<option value="${b}" ${b === state.parcelBuffer ? "selected" : ""}>${b} m</option>`).join("")}</select></label>`);
-    parts.push(`<div class="dropzone" data-parcel-drop>または、ここに公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
+    parts.push(`<div class="dropzone" data-parcel-drop>または、公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
     if (state.parcelError) parts.push(`<p class="small err">${escapeHtml(state.parcelError)}</p>`);
     if (s.fromFile && s.maps.length) {
       parts.push(`<details><summary>地図ごとの内訳（${s.maps.length} 枚）</summary><table class="list small"><thead><tr><th>地図</th><th>市区町村</th><th>座標系</th><th class="num">筆</th><th class="num">残した</th></tr></thead><tbody>`);
@@ -1316,9 +1329,10 @@ function renderParcelStep(state: AppState): string {
       if (state.centerline.source.kind === "demo") parts.push(`<div class="row btns"><button class="btn small" data-parcel-demo>見本の公図に戻す</button></div>`);
     }
   }
-  parts.push(
-    `<p class="muted small">法務省「登記所備付地図データ」の zip をそのまま落とせます（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${state.parcelBuffer}m の筆と中心線を包む筆だけを残します（幅を広げると周りの筆も見られます。1000m なら筆は数倍、読み込みと保存もその分）。170MB ほどの地図でも数秒。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
-  );
+  parts.push(about(
+    `<p>「自動で取得」は、中心線が通る市町村を OpenStreetMap で当て、G空間情報センターで法務省の「登記所備付地図データ」のいちばん新しい年版を探し、利用規約への同意のあとで取得します ${help(HELP.mojfetch)}。</p>`,
+    `<p>手で落とすなら、法務省の zip をそのまま（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${state.parcelBuffer}m の筆と中心線を包む筆だけを残します（幅を広げると周りの筆も見られますが、筆の数と読み込み・保存はその分増えます）。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
+  ));
   return parts.join("");
 }
 
@@ -1646,8 +1660,7 @@ function renderJudgeStep(state: AppState): string {
   const parts: string[] = [];
   const byHuman = judged - byClaude;
   parts.push(tiles([{ label: "区切り", value: state.segments.length }, { label: "判定あり", value: judged, unit: `/ ${state.segments.length}`, tone: judged === state.segments.length && judged ? "ok" : undefined }, { label: "人が直した", value: byHuman }]));
-  parts.push(`<p>区切り ${help(HELP.segment)} ごとに、航空写真の切り抜きから木の割合を判定します ${help(HELP.judged)}。Claude ${byClaude}・人 ${byHuman}。</p>`);
-  parts.push(`<p class="small muted">判定は、区切り 40 ほどをまとめた写真 1 枚ずつ（${windows.length} 枚）を Claude に見せて進めます。</p>`);
+  parts.push(`<p>区切り ${help(HELP.segment)} ごとに、航空写真の切り抜きから木の割合を Claude が判定します。</p>`);
   if (state.run) {
     const r = state.run;
     parts.push(`<div class="progress"><i style="width:${(100 * r.done) / r.total}%"></i></div>`);
@@ -1658,13 +1671,15 @@ function renderJudgeStep(state: AppState): string {
     const usd = estimateCost(windows.length, model, review, !!photo2);
     parts.push(
       `<div class="actions"><button class="btn primary" data-judge ${hasKey && state.segments.length ? "" : "disabled"}>${judged ? "全部を判定し直す" : "木を判定する"} <span class="cost">約 ${fmtUsd(usd)}</span></button>` +
-        (hasKey
-          ? `<p class="muted small">${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。${photo2 ? `${photoLayerLabel(photo2)}も一緒に見せ、変化を拾います（設定で変えられます）。` : ""}送るのは航空写真の切り抜きだけです。${byHuman ? `人が直した ${byHuman} 区切りは上書きしません。` : ""}</p>`
-          : `<p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります。</p>`) +
+        (hasKey ? "" : `<p class="muted small">判定には API キーが要ります。右上の「設定」で入れると押せるようになります。</p>`) +
         `</div>`,
     );
-    if (state.centerline.source.kind === "demo" && judged) parts.push(`<div class="actions"><button class="btn" data-reset-demo>判定を見本に戻す</button></div>`);
     parts.push(`<div class="actions"><button class="btn next" data-go="5">次へ：確かめて直す</button></div>`);
+    parts.push(about(
+      `<p>区切り 40 ほどをまとめた写真 1 枚ずつ（${windows.length} 枚）を Claude に見せます。${MODELS[model]} が全区切りを見て、確信「低」の区切りだけ${review ? ` ${MODELS[review]} が見直します ${help(HELP.review)}` : "はそのまま残します"}。${photo2 ? `${photoLayerLabel(photo2)}も一緒に見せ、変化を拾います（設定で変えられます）。` : ""}</p>`,
+      `<p>送るのは航空写真の切り抜きだけで、座標・地名・案件名は送りません。判定は候補で、人が直した区切りは「全部を判定し直す」でも上書きしません ${help(HELP.judged)}。</p>`,
+      state.centerline.source.kind === "demo" && judged ? `<div class="row btns"><button class="btn small ghost" data-reset-demo>判定を見本に戻す</button></div>` : "",
+    ));
   }
   return parts.join("");
 }
@@ -1761,6 +1776,14 @@ function refreshJudgments(state: AppState) {
   renderChecks(state);
   persist(state);
   if (state.selectedSegment) selectSegment(state, state.selectedSegment, false);
+}
+
+/**
+ * 「この手順について」：説明の段落をたたんで置く。本文は数字のタイル・1 行・ボタンに絞り、読みたい人だけ開く
+ * （文字が多くて見づらい、と 2026-11-04 に言われた。情報は消さず、開けば読める所へ移す）
+ */
+function about(...html: string[]): string {
+  return `<details class="about"><summary>この手順について</summary>${html.filter(Boolean).join("")}</details>`;
 }
 
 /** 数字のタイル。文より先に数を見せる（手順 3・4・5・7） */
@@ -1957,15 +1980,16 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
     `<dl class="kv">
       <dt>種類</dt><dd><span class="badge" style="background:${KIND_COLORS[p.properties.kind] ?? "#eee"}">${escapeHtml(kindLabel(p.properties.kind))}</span> ${help(HELP.kind)}</dd>
       ${notLand ? `<dd style="grid-column:1/-1" class="muted small">土地ではなく「この地図ではここから先は描いていない」という印です。この中の筆は隣の地図に載っています。</dd>` : ""}
-      <dt>かかる</dt><dd>${h ? `はい。${h.areaM2} m²` : "いいえ"}</dd>
-      ${h ? `<dt>起点から</dt><dd>${h.fromM}〜${h.toM} m（${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）</dd>` : ""}
+      <dt>かかる</dt><dd>${h ? `${h.areaM2} m²（起点から ${h.fromM}〜${h.toM} m・${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}）` : "いいえ"}</dd>
       ${h ? `<dt>木（推定）</dt><dd>${tree ? `最大 ${tree.tree}%（${tree.n} 区切り）` : '<span class="muted">まだ判定していません</span>'}</dd>` : ""}
+      ${h ? `<dt>森林の区域</dt><dd>${state.forest ? escapeHtml(forestText(state.forest.get(h.parcelId))) + (noticeText(state.forest.get(h.parcelId)) ? `<br><span class="badge low">届出が要るかもしれない（市町村に確かめる）</span>` : "") : `<span class="muted">${escapeHtml(state.forestNote)}</span>`} ${help(HELP.forest)}</dd>` : ""}
+    </dl>
+    <details class="more"><summary>ほか</summary><dl class="kv">
       ${h ? `<dt>KP（推定）</dt><dd>${kpText(state, (h.fromM + h.toM) / 2)}</dd>` : ""}
       <dt>外で見る</dt><dd>${earthLink(ringCenter(h ? h.shape.coordinates[0][0] : p.geometry.coordinates[0]))}</dd>
-      ${h ? `<dt>森林の区域</dt><dd>${state.forest ? escapeHtml(forestText(state.forest.get(h.parcelId))) + (noticeText(state.forest.get(h.parcelId)) ? `<br><span class="badge low">届出が要るかもしれない（市町村に確かめる）</span>` : "") : `<span class="muted">${escapeHtml(state.forestNote)}</span>`} ${help(HELP.forest)}</dd>` : ""}
       <dt>地図</dt><dd>${escapeHtml(p.properties.map)} ${help(HELP.mapName)}${mapLink(state, p.properties.map)}</dd>
     </dl>
-    <p class="muted small" style="margin-top:10px">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p>`,
+    <p class="muted small">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p></details>`,
   );
   // かかる部分の形に合わせて飛ぶ。筆全体だと、山林の大きな筆では引きすぎて黄色が点になる
   if (fly) flyTo(state, boundsOf(h ? h.shape.coordinates.flat(2) : p.geometry.coordinates[0]));
@@ -1987,27 +2011,26 @@ function selectSegment(state: AppState, id: string, fly: boolean) {
   openDetail(
     `区切り ${escapeHtml(id)}`,
     `<dl class="kv">
-      <dt>場所</dt><dd>起点から ${f.properties!.fromM}〜${f.properties!.toM} m の${side}</dd>
-      <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
-      <dt>外で見る</dt><dd>${earthLink(ringCenter(f.geometry.coordinates[0]))}</dd>
-      <dt>面積</dt><dd>${f.properties!.areaM2} m²</dd>
-      <dt>外側</dt><dd>中心線から ${f.properties!.outerMaxM} m まで ${help(HELP.band)}</dd>
-      ${state.segForest?.get(id) ? `<dt>森林の区域</dt><dd>${Math.round(state.segForest.get(id)!.ratio * 100)}% が区域の中${state.forestFlags?.get(id) ? `<br><span class="badge forest">食い違い</span> <span class="small">${escapeHtml(state.forestFlags.get(id)!)}</span>` : ""}</dd>` : ""}
+      <dt>場所</dt><dd>起点から ${f.properties!.fromM}〜${f.properties!.toM} m の${side}・${f.properties!.areaM2} m²</dd>
       ${
         j
-          ? `<dt>木の割合</dt><dd><b>${j.tree}%</b></dd>
-             <dt>樹種</dt><dd>${escapeHtml(j.kind)}</dd>
-             <dt>木以外</dt><dd>${escapeHtml(j.other.join("・")) || "—"}</dd>
-             <dt>確信</dt><dd><span class="badge ${confClass}">${escapeHtml(j.conf)}</span></dd>
+          ? `<dt>木</dt><dd><b>${j.tree}%</b>　${escapeHtml(j.kind)}${j.other.length ? `　＋${escapeHtml(j.other.join("・"))}` : ""}</dd>
+             <dt>確信</dt><dd><span class="badge ${confClass}">${escapeHtml(j.conf)}</span>　<span class="badge ${j.by === "人" ? "human" : ""}">${escapeHtml(j.by)}${j.model ? `（${escapeHtml(shortModel(j.model))}）` : ""}</span></dd>
              <dt>理由</dt><dd>${escapeHtml(j.why)}</dd>
-             <dt>決めたのは</dt><dd><span class="badge ${j.by === "人" ? "human" : ""}">${escapeHtml(j.by)}${j.model ? `（${escapeHtml(shortModel(j.model))}）` : ""}</span></dd>
              ${j.before ? `<dt>最初の判定</dt><dd class="muted">${j.before.tree}%・確信 ${escapeHtml(j.before.conf)}（${escapeHtml(shortModel(j.before.model ?? ""))}）→ 見直しました</dd>` : ""}
              ${j.oldYear ? `<dt>別の年</dt><dd>${escapeHtml(j.oldYear)} 年度の写真では ${j.treeOld ?? "?"}%。変化：<b>${escapeHtml(j.change ?? "分からない")}</b> ${help(HELP.change)}</dd>` : ""}`
           : state.unjudged.has(id)
             ? `<dt>判定</dt><dd class="muted">Claude の答えにこの番号がありませんでした（未判定）。現地で確かめるか、手で直してください</dd>`
             : `<dt>判定</dt><dd class="muted">まだ判定していません</dd>`
       }
+      ${state.forestFlags?.get(id) ? `<dt>森林の区域</dt><dd><span class="badge forest">食い違い</span> <span class="small">${escapeHtml(state.forestFlags.get(id)!)}</span></dd>` : ""}
     </dl>
+    <details class="more"><summary>ほか</summary><dl class="kv">
+      <dt>KP（推定）</dt><dd>${kpText(state, (f.properties!.fromM + f.properties!.toM) / 2)}</dd>
+      <dt>外側</dt><dd>中心線から ${f.properties!.outerMaxM} m まで ${help(HELP.band)}</dd>
+      ${state.segForest?.get(id) ? `<dt>森林の区域</dt><dd>${Math.round(state.segForest.get(id)!.ratio * 100)}% が区域の中</dd>` : ""}
+      <dt>外で見る</dt><dd>${earthLink(ringCenter(f.geometry.coordinates[0]))}</dd>
+    </dl></details>
     <div class="seg-photo" data-seg-photo><span class="muted small">Claude が見た写真を切り出しています…</span></div>
     <p class="muted small guide">机で判定を直すなら「この区切りを直す」。現地で見たことを残すなら「現地の記録」（判定は変えず、記録だけ残ります）。</p>
     ${fixForm(j, !touchFirst())}
@@ -2226,13 +2249,13 @@ function renderList(state: AppState) {
       const fi = state.forest?.get(h.parcelId);
       const forestCell = !state.forest ? `<span class="muted">…</span>` : !fi || fi.ratio < 0.02 ? `<span class="muted">外</span>` : `<span title="${escapeHtml(forestText(fi))}">${fi.ratio < 0.5 ? "一部" : fi.kinds.includes("国有林") ? "国有" : "民有"}</span>`;
       return `<tr data-id="${escapeHtml(h.parcelId)}" class="${h.parcelId === state.selectedParcel ? "selected" : ""}">
-        <td class="num">${h.fromM}〜${h.toM}</td><td>${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}</td>
+        <td class="num">${h.fromM}〜${h.toM}</td><td class="opt">${h.sides.map((s) => (s === "L" ? "左" : "右")).join("・")}</td>
         <td title="${escapeHtml(p.properties.oaza ?? "")}">${escapeHtml(p.properties.chiban)}</td>
-        <td class="num">${h.areaM2}</td><td>${treeCell}</td><td>${forestCell}</td></tr>`;
+        <td class="num">${h.areaM2}</td><td>${treeCell}</td><td class="opt">${forestCell}</td></tr>`;
     })
     .join("");
   document.getElementById("list-body")!.innerHTML = `<table class="list"><thead><tr>
-    <th>起点から m</th><th>左右</th><th>地番</th><th>かかる m²</th><th>木（推定）</th><th title="森林の区域（林野庁）">森林</th>
+    <th>起点から m</th><th class="opt">左右</th><th>地番</th><th>かかる m²</th><th>木（推定）</th><th class="opt" title="森林の区域（林野庁）">森林</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
   document.querySelectorAll<HTMLTableRowElement>("table.list tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => selectParcel(state, tr.dataset.id!, true)),
@@ -2388,9 +2411,14 @@ function renderLegend(state: AppState) {
     { key: "section", label: "輸送路の中心線" },
     { key: "kps", label: "距離標（人が置いた。手順 6）" },
   ];
-  document.getElementById("legend-body")!.innerHTML = groups
-    .map((g) => `<label class="${g.indent ? "indent" : ""}"><input type="checkbox" data-group="${g.key}" checked> ${g.label}</label>${g.sub ? `<div class="sub">${g.sub}</div>` : ""}`)
-    .join("");
+  document.getElementById("legend-body")!.innerHTML =
+    groups.map((g) => `<label class="${g.indent ? "indent" : ""}"><input type="checkbox" data-group="${g.key}" checked> ${g.label}</label>${g.sub ? `<div class="sub">${g.sub}</div>` : ""}`).join("") +
+    `<button class="btn small ghost" data-legend-more type="button">色の意味を見る</button>`;
+  document.querySelector("[data-legend-more]")?.addEventListener("click", (e) => {
+    const legend = document.getElementById("legend")!;
+    legend.classList.toggle("full");
+    (e.currentTarget as HTMLButtonElement).textContent = legend.classList.contains("full") ? "色の意味をたたむ" : "色の意味を見る";
+  });
   document.querySelectorAll<HTMLInputElement>("[data-group]").forEach((cb) =>
     cb.addEventListener("change", () => {
       setGroupVisible(state.map, cb.dataset.group as LayerGroup, cb.checked);
