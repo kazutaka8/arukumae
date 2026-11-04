@@ -21,6 +21,8 @@
   --line-strong: rgba(29, 35, 42, 0.24);
   --accent: #b7262a; /* ロゴの赤。少しだけ沈めて、面に乗っても騒がしくない */
   --accent-soft: #fbeaea;
+  --navy: #0f1b33; /* 印の地の色。上の帯に使う */
+  --navy-muted: #aab6c8;
   --ok: #2e7d32;
   --ok-soft: #e8f3e8;
   --warn: #9a5b00;
@@ -41,22 +43,26 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 /* スマホのブラウザは URL の欄が出たり消えたりして 100% がずれる。dvh（いま見えている高さ）が使えるならそれで */
 @supports (height: 100dvh) { html, body, #app { height: 100dvh; } }
 
+/* 上の帯は印と同じ濃紺（--navy）。印の箱が帯に溶け、浮かない。文字は白、補足は薄い水色がかった灰 */
 .topbar {
   height: var(--topbar-h);
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 0 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  background: var(--navy);
+  color: #ffffff;
 }
-.brand { font-weight: 600; letter-spacing: 0.06em; font-size: 13.5px; }
-.brand { display: inline-flex; align-items: center; gap: 8px; }
-.brand-mark { width: 20px; height: 20px; border-radius: 5px; display: block; } /* 印（docs/brand/mark.svg と同じもの。favicon を使い回す） */
-.project { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand { font-weight: 600; letter-spacing: 0.06em; font-size: 13.5px; display: inline-flex; align-items: center; gap: 9px; color: #ffffff; }
+.brand-mark { width: 26px; height: 26px; display: block; } /* 印（docs/brand/mark.svg と同じもの。favicon を使い回す）。箱の色が帯と同じなので縁は見えない */
+.project { color: var(--navy-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spacer { flex: 1; }
-.save-state { color: var(--muted); font-size: 11.5px; padding: 2px 9px; border-radius: 10px; background: var(--surface-2); }
-.save-state.err { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.save-state { color: var(--navy-muted); font-size: 11.5px; padding: 2px 9px; border-radius: 10px; background: rgba(255, 255, 255, 0.08); }
+.save-state.err { color: #ffb3b3; background: rgba(183, 38, 42, 0.35); font-weight: 600; }
+.topbar .btn.ghost { color: var(--navy-muted); border-color: rgba(255, 255, 255, 0.18); }
+.topbar .btn.ghost:hover { background: rgba(255, 255, 255, 0.08); color: #ffffff; }
+.topbar .icon-btn { color: var(--navy-muted); }
+.topbar .icon-btn:hover { background: rgba(255, 255, 255, 0.08); color: #ffffff; }
 
 .main { position: relative; height: calc(100% - var(--topbar-h)); }
 /* MapLibre の CSS（.maplibregl-map）が position: relative を当てるので、指定の強さを上げて勝たせる */
