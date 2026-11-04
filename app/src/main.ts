@@ -21,7 +21,7 @@ import { computeTrack, DEFAULT_TRACK, describeTrack, legacyTrack, type TrackResu
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { buildWalkMap, walkMapPageCount, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
-import { listChecks, treeText, type Check } from "./core/checks";
+import { type Check, listChecks, REVIEW_GAP, treeText } from "./core/checks";
 import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
 import { buildProject, describeCenterline, describeProject, mojAttribution, parseProject, projectFileName, type Centerline, type CenterlineSource, type MojSource, type ProjectFile } from "./core/project";
 import { clearLegacy, loadLegacy, loadStored, saveStored } from "./core/store";
@@ -498,7 +498,7 @@ const HELP = {
   band: "伐採範囲：掃く範囲（軌跡図、または車両の寸法から計算した架空の軌跡図）に余裕幅を足し、そのさらに外へ伐採の幅を足したもの。道路の端（中心線から道路の半幅）より外の部分だけを区切りにします。手順 2 で決め方を変えられます。",
   segment: "区切り：伐採範囲を道に沿って 10m ごと、左右別に分けたもの。番号 L032 は「起点から 320〜330m の左」。この1つずつについて、木の有無を航空写真から判定します。",
   judged: "判定が付いている区切りの数。見本として最初から入っている Claude の判定、この道具から Claude に判定させたもの、人が直したものを合わせた数です。",
-  check: "確かめる所：(1) Claude の確信が「低」だった区切り（写真がぼやける・影で見えない・枠の位置が読みにくい、など）と、(2) 森林の区域（林野庁）と判定が食い違う区切り（区域の中なのに木が 25% 以下、区域の外なのに木が 75% 以上。区域の縁から 15m 以内は指摘しない）、(3) 別の年の写真と比べて変化があった区切り、(4) Claude の答えに番号がなく未判定のままの区切り。現地で見る候補として一覧に並べています。",
+  check: "確かめる所：(1) Claude の確信が「低」だった区切り（写真がぼやける・影で見えない・枠の位置が読みにくい、など）と、(2) 森林の区域（林野庁）と判定が食い違う区切り（区域の中なのに木が 25% 以下、区域の外なのに木が 75% 以上。区域の縁から 15m 以内は指摘しない）、(3) 別の年の写真と比べて変化があった区切り、(4) 上位のモデルの見直しで木の割合が 50 ポイント以上変わった区切り（2 つのモデルが割れた所）、(5) Claude の答えに番号がなく未判定のままの区切り。現地で見る候補として一覧に並べています。",
   review: "見直し：最初のモデル（Sonnet）の確信が低かった区切りだけ、上位のモデル（Fable）に同じ写真をもう一度見せます。最初の判定は見せません（引きずられないように）。",
   kp: "KP（キロポスト）：道路管理者が決めた、その道路の起点からの距離（km）。道ばたの距離標に書いてあります。位置も値も公開データに無いので、現地やストリートビューで人が読んだ距離標を 2 本以上置くと、その間を中心線に沿って直線で補間します。「起点からの距離（m）」はこの案件の区間の起点から測ったもので、KP とは別の物差しです。",
   forest: "森林の区域：林野庁の「森林計画対象森林レイヤ」（地域森林計画の対象の民有林と国有林の区域、林班）。筆のかかる部分がこの区域にどれだけ入るかを測り、半分未満なら「一部」と書きます。伐採の届出が要るかどうかは、登記の地目ではなく、この民有林の区域かどうかで決まるとされています（自分の理解。森林法第10条の8）。道具は目印を付けるまでで、要否は所管の市町村に確かめてください。区域の線は 1/5,000 相当で、筆の境界とはふつうずれます。",
@@ -578,10 +578,11 @@ function renderStep(state: AppState) {
       const reviewed = [...state.judgments.values()].filter((j) => j.before);
       const forestN = lows.filter((c) => c.kind === "森林").length;
       const changeN = lows.filter((c) => c.kind === "変化").length;
+      const gapN = lows.filter((c) => c.kind === "食い違い").length;
       const noneN = lows.filter((c) => c.kind === "未判定").length;
       const seen = countNotes(state.notes, lows.map((l) => l.segmentId));
       parts.push(tiles([{ label: "確かめる所", value: lows.length, tone: "warn" }, { label: "現地で見た", value: seen.checksDone, unit: `/ ${lows.length}` }, { label: "現地 ×", value: seen.byResult["×"], tone: seen.byResult["×"] ? "warn" : undefined }]));
-      parts.push(`<p>確かめる所 ${help(HELP.check)}：確信が低い ${lows.length - forestN - changeN - noneN}・森林と食い違う ${forestN}${changeN ? `・変化 ${changeN}` : ""}${noneN ? `・未判定 ${noneN}` : ""}。一覧の行か「次 →」で順に見ます。</p>`);
+      parts.push(`<p>確かめる所 ${help(HELP.check)}：確信が低い ${lows.length - forestN - changeN - noneN - gapN}・森林と食い違う ${forestN}${changeN ? `・変化 ${changeN}` : ""}${gapN ? `・見直しで割れた ${gapN}` : ""}${noneN ? `・未判定 ${noneN}` : ""}。一覧の行か「次 →」で順に見ます。</p>`);
       // 前へ・次へは、一覧で絞り込んだ中を回る。現地で「まだ見ていない所」だけを順に回れるように
       const vis = visibleChecks(state);
       const narrowed = vis.length !== lows.length ? `（絞り込み ${help(HELP.filter)}）` : "";
@@ -593,7 +594,7 @@ function renderStep(state: AppState) {
       }
       parts.push(`<div class="actions"><button class="btn primary next" data-go="6">次へ：KP</button></div>`);
       parts.push(about(
-        `<p>確かめる所は 4 種類：Claude の確信が「低」、森林の区域（林野庁）と判定が食い違う、別の年の写真と比べて変化があった ${help(HELP.change)}、答えに番号がなく未判定。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}</p>`,
+        `<p>確かめる所は 5 種類：Claude の確信が「低」、森林の区域（林野庁）と判定が食い違う、別の年の写真と比べて変化があった ${help(HELP.change)}、見直しで木の割合が ${REVIEW_GAP} ポイント以上変わった（最初と上位のモデルで割れた）、答えに番号がなく未判定。${reviewed.length ? `うち ${reviewed.length} 区切りは上位のモデルが見直し済み ${help(HELP.review)}。` : ""}</p>`,
         `<p>机で直すなら区切りの詳細の「この区切りを直す」。現地で見たことは「現地の記録」（○△×とメモ） ${help(HELP.notes)}。× の区切りは帰ってから直します。</p>`,
       ));
       showListTab("checks");
@@ -1873,7 +1874,7 @@ function renderChecks(state: AppState) {
       const j = state.judgments.get(c.segmentId);
       const side = c.segmentId.startsWith("L") ? "左" : "右";
       const tag =
-        c.kind === "森林" ? `<span class="badge forest">森林</span>` : c.kind === "変化" ? `<span class="badge change">変化</span>` : c.kind === "未判定" ? `<span class="badge">未判定</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
+        c.kind === "森林" ? `<span class="badge forest">森林</span>` : c.kind === "変化" ? `<span class="badge change">変化</span>` : c.kind === "食い違い" ? `<span class="badge gap">割れた</span>` : c.kind === "未判定" ? `<span class="badge">未判定</span>` : j?.before ? `<span class="badge">見直し済</span>` : `<span class="badge low">低</span>`;
       return `<tr data-seg="${c.segmentId}" class="${c.segmentId === state.selectedSegment ? "selected" : ""}">
         <td class="num">${i + 1}</td><td class="num">${seg ? `${seg.fromM}〜${seg.toM}` : ""}</td><td>${side}</td>
         <td class="num">${treeText(c.tree)}</td><td>${tag}</td>

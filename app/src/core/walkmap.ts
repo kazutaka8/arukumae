@@ -620,7 +620,7 @@ function drawCheckTable(ctx: CanvasRenderingContext2D, input: WalkMapInput, rows
     { label: "区切り", w: 18 },
     { label: "起点から", w: 20 },
     { label: "木", w: 10 },
-    { label: "理由（低＝確信が低い、森林＝区域と食い違う、記録＝現地の記録あり）", w: 74 },
+    { label: "理由（低＝確信が低い、森林＝区域と食い違う、食い違い＝見直しで割れた、記録＝現地の記録あり）", w: 74 },
     { label: "○ ×", w: 14 },
     { label: "メモ", w: PAGE_W - MARGIN * 2 - 136 },
   ];

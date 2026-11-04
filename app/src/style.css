@@ -181,6 +181,7 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .badge.human { background: #e4eefb; color: #1b57a6; }
 .badge.forest { background: var(--ok-soft); color: var(--ok); }
 .badge.change { background: #ece8f7; color: #4e3b9a; }
+.badge.gap { background: #fde8e8; color: #9b2c2c; } /* 見直しでモデルが割れた区切り */
 .legend-body label.year { gap: 6px; }
 .legend-body label.year select { font: inherit; font-size: 11.5px; padding: 2px 4px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
 .seg-photo-pair:has(figure:nth-child(3)) { grid-template-columns: 1fr 1fr 1fr; }

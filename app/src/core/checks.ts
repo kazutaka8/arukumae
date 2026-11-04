@@ -4,6 +4,8 @@
  * - 森林：森林の区域と判定が食い違う区切り（forest.ts の forestMismatch）
  * - 変化：別の年の写真と比べて変化があった区切り（F11。もう切られている、造成された、など）
  * - 未判定：Claude の答えに番号が無かった区切り（再送はしない。spec §8.4。tree は null）
+ * - 食い違い：上位のモデルの見直しで木の割合が大きく変わった区切り（spec §8.4。2 つのモデルが割れた所は迷いやすい。
+ *   Codex の提案 2026-11-04、開発者の判断で入れた）
  * 画面の一覧・一覧表の列・持って歩く地図の表が同じ並びになるよう、ここで作る
  */
 import type { Segment } from "./geom";
@@ -11,11 +13,14 @@ import { isRealChange, type Judgment } from "./types";
 
 export interface Check {
   segmentId: string;
-  kind: "低" | "森林" | "変化" | "未判定";
+  kind: "低" | "森林" | "変化" | "未判定" | "食い違い";
   why: string;
   /** 木の割合。未判定なら null */
   tree: number | null;
 }
+
+/** 見直し前後でこれ以上（ポイント）変わったら「食い違い」。25・50・75 の目盛りで 2 段以上 */
+export const REVIEW_GAP = 50;
 
 /** 木の割合の表示。未判定は「—」 */
 export function treeText(tree: number | null): string {
@@ -34,6 +39,7 @@ export function listChecks(segments: Segment[], judgments: Map<string, Judgment>
     const f = forestFlags?.get(s.id);
     if (f) out.push({ segmentId: s.id, kind: "森林", why: f, tree: j.tree });
     if (isRealChange(j.change)) out.push({ segmentId: s.id, kind: "変化", why: `${j.oldYear ?? "前"} 年度の写真と比べて「${j.change}」（当時 ${j.treeOld ?? "?"}% → 今 ${j.tree}%）`, tree: j.tree });
+    if (j.before && Math.abs(j.tree - j.before.tree) >= REVIEW_GAP) out.push({ segmentId: s.id, kind: "食い違い", why: `見直しで ${j.before.tree}% → ${j.tree}%（最初と上位のモデルで割れた）`, tree: j.tree });
   }
   return out;
 }
@@ -45,5 +51,13 @@ export function checkText(checks: Check[]): string {
 
 /** 種類の説明（KML の吹き出し・画面の札） */
 export function checkKindText(kind: Check["kind"]): string {
-  return kind === "森林" ? "森林の区域と判定が食い違う" : kind === "変化" ? "別の年の写真と比べて変化があった" : kind === "未判定" ? "判定なし（答えに番号がなかった）" : "Claude の確信が低い";
+  return kind === "森林"
+    ? "森林の区域と判定が食い違う"
+    : kind === "変化"
+      ? "別の年の写真と比べて変化があった"
+      : kind === "未判定"
+        ? "判定なし（答えに番号がなかった）"
+        : kind === "食い違い"
+          ? "見直しで木の割合が大きく変わった（モデルが割れた）"
+          : "Claude の確信が低い";
 }

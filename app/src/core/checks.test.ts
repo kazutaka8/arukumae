@@ -26,6 +26,18 @@ describe("現地で確かめる所", () => {
     expect(checkKindText("変化")).toContain("別の年の写真");
   });
 
+  it("見直しで木の割合が 50 ポイント以上変わった区切りは「食い違い」。25 ポイントなら入れない。確信 低と重なれば 2 行", () => {
+    const judgments = new Map<string, Judgment>([
+      ["L000", j("L000", { tree: 100, conf: "高", before: { tree: 0, conf: "低", model: "a" } })],
+      ["L001", j("L001", { tree: 50, conf: "高", before: { tree: 25, conf: "低" } })],
+      ["L002", j("L002", { tree: 0, conf: "低", before: { tree: 75, conf: "低" } })],
+    ]);
+    const out = listChecks(segs, judgments, null);
+    expect(out.map((c) => `${c.segmentId}:${c.kind}`)).toEqual(["L000:食い違い", "L002:低", "L002:食い違い"]);
+    expect(out[0].why).toContain("見直しで 0% → 100%");
+    expect(checkKindText("食い違い")).toContain("モデルが割れた");
+  });
+
   it("Claude の答えに番号がなかった区切りは、未判定のまま並ぶ（tree は null）。判定が付けば消える", () => {
     const judgments = new Map<string, Judgment>([["L000", j("L000")]]);
     const unjudged = new Set(["L000", "R001"]);
