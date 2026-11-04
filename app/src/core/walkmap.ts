@@ -181,12 +181,18 @@ function header(ctx: CanvasRenderingContext2D, input: WalkMapInput, sub: string,
   font(ctx, 4.2, true);
   ctx.fillText(`${input.title}　持って歩く地図`, mm(MARGIN), mm(MARGIN));
   font(ctx, 3.2);
+  const note = "下調べの資料。現地で確かめる前提です";
+  // 説明の行は右の赤い注意書きの手前で切る。索引図の説明が「表の続きのページを含めて…」で長くなると、
+  // 注意書きの下に潜って読めなかった（2026-11-04 の録画で気づいた）
+  const maxSub = mm(PAGE_W - 2 * MARGIN) - ctx.measureText(note).width - mm(4);
+  let shown = sub;
+  while (shown.length > 1 && ctx.measureText(shown).width > maxSub) shown = `${shown.slice(0, -2)}…`;
   ctx.fillStyle = "#6b7a89";
-  ctx.fillText(sub, mm(MARGIN), mm(MARGIN + 6.5));
+  ctx.fillText(shown, mm(MARGIN), mm(MARGIN + 6.5));
   ctx.textAlign = "right";
   ctx.fillText(`${pageNo} / ${pageTotal}　${day}`, mm(PAGE_W - MARGIN), mm(MARGIN));
   ctx.fillStyle = "#c62828";
-  ctx.fillText("下調べの資料。現地で確かめる前提です", mm(PAGE_W - MARGIN), mm(MARGIN + 6.5));
+  ctx.fillText(note, mm(PAGE_W - MARGIN), mm(MARGIN + 6.5));
   ctx.strokeStyle = "#d9dee3";
   ctx.lineWidth = mm(0.2);
   ctx.beginPath();
