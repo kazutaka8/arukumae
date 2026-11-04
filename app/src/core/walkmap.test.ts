@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildSegments, leftNormals, resample } from "./geom";
 import type { EN } from "./proj";
 import type { Judgment } from "./types";
-import { checkRows, fitFrame, rowChunks, walkMapPageCount, type WalkMapInput } from "./walkmap";
+import { checkRows, fitFrame, pagePlan, rowChunks, walkMapPageCount, type WalkMapInput } from "./walkmap";
 
 describe("持って歩く地図：表に出す区切り", () => {
   const dense = resample([[0, 0], [40, 0]] as EN[], 1);
@@ -66,5 +66,19 @@ describe("持って歩く地図：表の行が多いとき（Codex の指摘 202
     };
     expect(walkMapPageCount(input)).toBe(3);
     expect(walkMapPageCount({ ...input, notes: new Map() })).toBe(2);
+  });
+  it("地図が 2 枚で、1 枚目に表の続きが付くと、2 枚目の地図は p.4（索引図とヘッダで同じ番号）", () => {
+    const dense = resample([[0, 0], [400, 0]] as EN[], 1);
+    const normals = leftNormals(dense);
+    const segs = buildSegments(dense, normals, { step: 10, roadHalf: 3, bandOut: 10 });
+    // 前半 200m（起点から 0〜190m）の 40 区切りだけに記録 → 1 枚目は 40 行（14＋26）、2 枚目は 0 行
+    const notes = new Map(segs.filter((s) => s.fromM < 200).map((s) => [s.id, { segmentId: s.id, result: "○" as const, memo: "", at: "" }]));
+    const input: WalkMapInput = {
+      title: "t", roadName: "r", dense, normals, segments: segs, parcels: [], hits: [], judgments: new Map(), kps: [], sweep: null, outer: null, tiltZones: [], trackText: "", withPhoto: false, forest: null, forestFlags: null, notes,
+    };
+    const plan = pagePlan(input);
+    expect(plan.pages.length).toBe(2);
+    expect(plan.starts).toEqual([2, 4]);
+    expect(plan.total).toBe(4);
   });
 });

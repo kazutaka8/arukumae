@@ -156,6 +156,11 @@ describe("伐採範囲の決め方の数（Codex の指摘 2026-11-04：文字�
     expect(p.track.source.vehicle.tractorWheelbase).toBe(PRESETS.lifter.vehicle.tractorWheelbase);
     expect("extra" in p.track.source.vehicle).toBe(false);
   });
+  it("伸縮トレーラーの標準値（bladeRootAt が負）はそのまま通る", () => {
+    const p = parseProject(withSource({ kind: "vehicle", preset: "extendable", tiltZones: [], vehicle: PRESETS.extendable.vehicle }), DEMO);
+    if (p.track.source.kind !== "vehicle") throw new Error("vehicle のはず");
+    expect(p.track.source.vehicle.bladeRootAt).toBe(-3);
+  });
   it("仮の帯の幅が数でなければ断る", () => {
     expect(() => parseProject(withSource({ kind: "band", halfWidth: "13" }), DEMO)).toThrow(/仮の帯/);
     expect(parseProject(withSource({ kind: "band", halfWidth: 13 }), DEMO).track.source.kind).toBe("band");

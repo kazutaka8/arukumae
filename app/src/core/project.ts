@@ -159,8 +159,9 @@ export function parseProject(text: string, demo: DemoCenterline): ProjectFile {
     const vehicle: Record<string, number> = {};
     for (const k of Object.keys(base)) {
       const v = given[k];
+      // 負も通す（bladeRootAt はキングピンより前を負で表し、伸縮トレーラーの標準値が -3。Codex の指摘 2026-11-04）
       if (v == null) vehicle[k] = base[k];
-      else if (!isNum(v) || v < 0) throw new Error(`車両の寸法（track.source.vehicle.${k}）が数ではありません`);
+      else if (!isNum(v)) throw new Error(`車両の寸法（track.source.vehicle.${k}）が数ではありません`);
       else vehicle[k] = v;
     }
     src.vehicle = vehicle;

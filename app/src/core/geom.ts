@@ -161,7 +161,8 @@ export function buildSegments(dense: EN[], normals: EN[], opt: SegmentOptions = 
       const i0 = k * opt.step;
       const i1 = Math.min((k + 1) * opt.step, dense.length - 1);
       // 終端の余りが 1m でも区切りにする（101m の中心線で最後の 1m を捨て、そこだけにかかる筆を漏らした。Codex の指摘 2026-11-04）。
-      // 短い余りは下で前の区切りに合わせる
+      // 面積が小さければ下で前の区切りに合わさる。長さで必ず合わせる条件は入れない（前の版で独立していた 2m の区切りの番号が変わり、
+      // 保存した判定・記録の指す先が消える）
       if (i1 <= i0) break;
       const { outerMax } = build(side, i0, i1);
       // 伐採範囲が道路の端より外に出ない区切りは作らない（軌跡図がない所、車両が道路に収まる所）
@@ -173,7 +174,7 @@ export function buildSegments(dense: EN[], normals: EN[], opt: SegmentOptions = 
     while (idx < ranges.length) {
       const cur = ranges[idx];
       const area = ringArea(build(side, cur.i0, cur.i1).ring);
-      if (area >= minArea && cur.i1 - cur.i0 >= 3) {
+      if (area >= minArea) {
         idx++;
         continue;
       }

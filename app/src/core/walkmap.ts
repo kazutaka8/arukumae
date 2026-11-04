@@ -111,25 +111,40 @@ export function rowChunks<T>(rows: T[]): T[][] {
   return out;
 }
 
-/** PDF の総ページ数：索引図 1 ＋ ルートのページ ＋ 表の続き */
+/**
+ * ページの割り付け：索引図 1 ＋ 地図のページ（表の続きが付くことがある）。
+ * starts[i] は i 番目の地図のページ番号（1 始まり。索引図が 1）。索引図の「p.n」と地図のヘッダで同じ番号を使う
+ * （索引図が i+2 のままで、続きのページが入るとずれた。Codex の指摘 2026-11-04）
+ */
+export function pagePlan(input: WalkMapInput): { pages: Segment[][]; starts: number[]; total: number } {
+  const pages = pagesOf(input.segments);
+  const starts: number[] = [];
+  let next = 2;
+  for (const segs of pages) {
+    starts.push(next);
+    next += rowChunks(checkRows(input, segs)).length;
+  }
+  return { pages, starts, total: next - 1 };
+}
+
+/** PDF の総ページ数 */
 export function walkMapPageCount(input: WalkMapInput): number {
-  return 1 + pagesOf(input.segments).reduce((n, segs) => n + rowChunks(checkRows(input, segs)).length, 0);
+  return pagePlan(input).total;
 }
 
 export async function buildWalkMap(input: WalkMapInput, onProgress?: (done: number, total: number) => void): Promise<Blob> {
-  const pages = pagesOf(input.segments);
-  const total = walkMapPageCount(input);
+  const { pages, starts, total } = pagePlan(input);
   const pdf = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const day = new Date().toISOString().slice(0, 10);
 
   // 索引図
-  const indexCanvas = await renderIndexPage(input, pages, day);
+  const indexCanvas = await renderIndexPage(input, pages, day, starts, total);
   pdf.addImage(indexCanvas.toDataURL("image/jpeg", 0.85), "JPEG", 0, 0, PAGE_W, PAGE_H);
   onProgress?.(1, total);
 
   let pageNo = 2;
   for (let i = 0; i < pages.length; i++) {
-    for (const canvas of await renderRoutePage(input, pages, i, day, pageNo, total)) {
+    for (const canvas of await renderRoutePage(input, pages, i, day, starts[i], total)) {
       pdf.addPage();
       pdf.addImage(canvas.toDataURL("image/jpeg", 0.85), "JPEG", 0, 0, PAGE_W, PAGE_H);
       onProgress?.(pageNo, total);
@@ -455,9 +470,9 @@ function legend(ctx: CanvasRenderingContext2D, x: number, y: number) {
 
 /* ---------- 索引図 ---------- */
 
-export async function renderIndexPage(input: WalkMapInput, pages: Segment[][], day: string): Promise<HTMLCanvasElement> {
+export async function renderIndexPage(input: WalkMapInput, pages: Segment[][], day: string, starts: number[] = pages.map((_, i) => i + 2), total = pages.length + 1): Promise<HTMLCanvasElement> {
   const [canvas, ctx] = newPage();
-  header(ctx, input, `区間全体の索引図。2 ページ目から、起点から約 200m ずつ ${pages.length} 枚`, 1, pages.length + 1, day);
+  header(ctx, input, `区間全体の索引図。2 ページ目から、起点から約 200m ずつ ${pages.length} 枚${total > pages.length + 1 ? "（表の続きのページを含めて全 " + total + " ページ）" : ""}`, 1, total, day);
   const box = { x: MARGIN, y: MARGIN + HEADER_H, w: PAGE_W - MARGIN * 2, h: 190 };
   const pts = input.dense.map(toPx);
   const f = fitFrame(box, bboxOf(pts, 60 / metersPerPx(toLonLat(input.dense[0])[1])), toLonLat(input.dense[0])[1]);
@@ -480,7 +495,7 @@ export async function renderIndexPage(input: WalkMapInput, pages: Segment[][], d
     font(ctx, 3.4, true);
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    const lab = `p.${i + 2}`;
+    const lab = `p.${starts[i]}`;
     ctx.fillStyle = "#fff";
     ctx.fillRect(X(b[0]), Y(b[1]), ctx.measureText(lab).width + mm(2), mm(5));
     ctx.fillStyle = "#1f2933";

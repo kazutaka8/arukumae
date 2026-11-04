@@ -120,7 +120,13 @@ describe("終端の余り（Codex の指摘 2026-11-04）", () => {
     expect(left.length).toBe(10);
     expect(left.at(-1)!.toM).toBe(100);
   });
-  it("104m なら余りの 4m は独立した区切り（3m 以上は残す）", () => {
+  it("102m なら余りの 2m は面積 20m² で独立した区切り（前の版と同じ番号のまま。判定・記録の指す先を変えない）", () => {
+    const dense = resample([[0, 0], [102, 0]] as EN[], 1);
+    const left = buildSegments(dense, leftNormals(dense)).filter((s) => s.side === "L");
+    expect(left.length).toBe(11);
+    expect([left.at(-1)!.id, left.at(-1)!.fromM, left.at(-1)!.toM]).toEqual(["L010", 100, 102]);
+  });
+  it("104m なら余りの 4m は独立した区切り", () => {
     const dense = resample([[0, 0], [104, 0]] as EN[], 1);
     const left = buildSegments(dense, leftNormals(dense)).filter((s) => s.side === "L");
     expect(left.length).toBe(11);
