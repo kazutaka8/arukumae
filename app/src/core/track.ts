@@ -9,7 +9,7 @@
  */
 import { strFromU8, unzipSync } from "fflate";
 import type { Feature, FeatureCollection, LineString, Polygon, Position } from "geojson";
-import { resample, StationIndex } from "./geom";
+import { StationIndex } from "./geom";
 import { toLonLat, toPlane, type EN } from "./proj";
 import type { Sweep } from "./vehicle";
 
@@ -127,27 +127,64 @@ function linesFromGeoJSON(json: unknown): NamedLine[] {
 }
 
 /**
- * 線・多角形の縁を中心線に投影して Sweep にする。
- * - 縁は 1m ごとに打ち直してから投影する（頂点だけだと間が抜ける）
- * - 中心線から maxDist より遠い点は無視する（別の道の軌跡）
- * - 点のない所は、maxGap（m）までなら両隣から直線で埋める。それより長く途切れた所は NaN（軌跡図がない）
- * - 片側だけ点がある所は、もう片側を 0 にする（掃く範囲が中心線まで届いていない）
+ * 線・多角形の縁から Sweep を作る。
+ * 中心線の各点の法線で、線の全部の辺を横切り、左右それぞれ「いちばん遠い交点」を幅にする（2026-11-04）。
+ * - それまでは縁の点を 1m ごとに打ち直して最寄りの点に投影していた。曲がりの外側では点が少ない区切りに幅の低い点しか当たらず、
+ *   ギザギザや落ち込みになった（車両の計算と同じ穴）。法線で横切れば、線が通っている所は必ず連続する
+ * - ヘアピンの反対側の脚の線を拾わないように、辺は「その辺の真ん中に最寄りの点が、いまの点から belongM 以内」のものだけ見る
+ * - 中心線から maxDist より遠い交点は無視する（別の道の軌跡）
+ * - 交点のない所は、maxGap（m）までなら両隣から直線で埋める。それより長く途切れた所は NaN（軌跡図がない）
+ * - 片側だけ交点がある所は、もう片側を 0 にする（掃く範囲が中心線まで届いていない）
  */
-export function sweepFromLines(dense: EN[], normals: EN[], lines: EN[][], maxDist = 120, maxGap = 10): Sweep {
+export function sweepFromLines(dense: EN[], normals: EN[], lines: EN[][], maxDist = 120, maxGap = 10, belongM = 60): Sweep {
   const n = dense.length;
   const left = new Float64Array(n).fill(NaN);
   const right = new Float64Array(n).fill(NaN);
   const index = new StationIndex(dense);
+  // 辺ごとに「どの点の近くの辺か」を先に決め、点の升に入れる
+  const cell = 50;
+  const buckets = new Map<string, { a: EN; b: EN; at: number }[]>();
   for (const line of lines) {
-    for (const p of resample(line, 1)) {
-      const near = index.nearest(p, maxDist);
+    for (let i = 1; i < line.length; i++) {
+      const a = line[i - 1];
+      const b = line[i];
+      const mid: EN = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const near = index.nearest(mid, maxDist + Math.hypot(b[0] - a[0], b[1] - a[1]) / 2);
       if (!near) continue;
-      const s = near.index;
-      const d = (p[0] - dense[s][0]) * normals[s][0] + (p[1] - dense[s][1]) * normals[s][1];
-      if (d >= 0) {
-        if (!(left[s] >= d)) left[s] = d;
-      } else if (!(right[s] >= -d)) right[s] = -d;
+      const key = Math.floor(near.index / cell);
+      (buckets.get(String(key)) ?? buckets.set(String(key), []).get(String(key))!).push({ a, b, at: near.index });
     }
+  }
+  for (let s = 0; s < n; s++) {
+    const P = dense[s];
+    const N = normals[s];
+    let lo = Infinity;
+    let hi = -Infinity;
+    const k0 = Math.floor((s - belongM) / cell);
+    const k1 = Math.floor((s + belongM) / cell);
+    for (let k = k0; k <= k1; k++) {
+      for (const e of buckets.get(String(k)) ?? []) {
+        if (Math.abs(e.at - s) > belongM) continue;
+        // 直線 P + d N と辺 a→b の交点
+        const ex = e.b[0] - e.a[0];
+        const ey = e.b[1] - e.a[1];
+        const det = ex * N[1] - N[0] * ey;
+        if (Math.abs(det) < 1e-9) continue;
+        const wx = e.a[0] - P[0];
+        const wy = e.a[1] - P[1];
+        const u = (N[0] * wy - N[1] * wx) / det;
+        if (u < -1e-9 || u > 1 + 1e-9) continue;
+        const d = (ex * wy - ey * wx) / det;
+        if (Math.abs(d) > maxDist) continue;
+        if (d > hi) hi = d;
+        if (d < lo) lo = d;
+      }
+    }
+    if (hi > -Infinity && hi >= 0) left[s] = hi;
+    if (lo < Infinity && lo <= 0) right[s] = -lo;
+    // 交点が片側にしかない（線が中心線の片側だけにある）ときは、その側の最大を取り、反対側は後で 0 にする
+    if (hi > -Infinity && hi < 0 && Number.isNaN(left[s])) right[s] = Math.max(right[s] || 0, -lo);
+    if (lo < Infinity && lo > 0 && Number.isNaN(right[s])) left[s] = Math.max(left[s] || 0, hi);
   }
   fillGaps(left, maxGap);
   fillGaps(right, maxGap);
