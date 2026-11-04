@@ -57,5 +57,6 @@ describe("中心線を選ぶ", () => {
     expect(roadNameFromLine("中心線")).toBe("");
     expect(roadNameFromLine("県道401号 中心線")).toBe("県道401号");
     expect(roadNameFromLine("小川長野線（CL）")).toBe("小川長野線");
+    expect(roadNameFromLine("日本、〒000-0000 ○○県○○市 から 日本、〒000-0001 ○○町 へのルート")).toBe("");
   });
 });

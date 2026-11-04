@@ -114,6 +114,8 @@ interface AppState {
   filter: { hits: HitFilter; q: string; checks: CheckFilter };
   /** 地図に重ねる写真の年（地理院の年度別写真）。null なら全国最新写真だけ */
   photoYear: PhotoLayer | null;
+  /** 公図から残す幅（中心線の両側 m）。次に読むときに使う */
+  parcelBuffer: number;
 }
 
 interface ParcelSource {
@@ -123,6 +125,8 @@ interface ParcelSource {
   skipped: string[];
   /** 自動で取得したときの出どころ（出典の表記と取り直しのため） */
   sources: MojSource[];
+  /** 読んだときの残す幅（m）。表示用 */
+  bufferM?: number;
 }
 
 /**
@@ -142,8 +146,9 @@ interface FetchRun {
 }
 
 const DEFAULT_NAME = "小川村 県道401号（見本）";
-/** 公図から残す幅：区間の両側（m）。前処理（tools/cut_parcels.py）と同じ */
+/** 公図から残す幅：区間の両側（m）の既定。前処理（tools/cut_parcels.py）と同じ。手順 2 で 500・1000 に広げられる（元の公図を広く見たいとき） */
 const PARCEL_BUFFER_M = 200;
+const BUFFER_KEY = "arukumae.parcelBuffer";
 
 async function main() {
   const root = document.getElementById("app")!;
@@ -219,6 +224,7 @@ async function main() {
     saveError: null,
     filter: { hits: "all", q: "", checks: "all" },
     photoYear: loadPhotoYear(),
+    parcelBuffer: [200, 500, 1000].includes(Number(localStorage.getItem(BUFFER_KEY))) ? Number(localStorage.getItem(BUFFER_KEY)) : PARCEL_BUFFER_M,
   };
 
   // 開発のときだけ、ブラウザの console から地図と状態をさわれるようにする（確かめ用）
@@ -460,6 +466,7 @@ function applyCenterline(state: AppState, coords: LonLat[], roadName: string, so
   if (lost.length && !confirm(`中心線を変えると、${lost.join("・")}は消えます（起点からの距離と区切りの番号が変わるため）。続けますか？\n残したいなら、先に「案件を保存する（JSON）」で案件ファイルにしてください。`)) return false;
   const demo = source.kind === "demo";
   const zone = zoneOf(midpoint(clean));
+  showBusy("中心線を決め直しています。区切りとかかる筆を作り直すのに数秒かかります…");
   const s = state.parcelSource;
   const parcels = opt.keepParcels && s.fromFile ? { fileName: s.fileName ?? "", maps: s.maps, skipped: s.skipped, features: state.parcels, ...(s.sources.length ? { sources: s.sources } : {}) } : null;
   const p = buildProject({
@@ -516,10 +523,14 @@ const HELP = {
   change:
     "変化：別の年の写真と比べて Claude が「木が減った」「造成や建物の変化」などと見た区切り。もう切られている、太陽光になっている、といった手がかりになります。現地で確かめる所に入ります。",
   filter: "絞り込み：一覧だけを絞ります。地図はそのままです（行を押せば地図が飛びます）。地番・所在の文字での検索は、種類と重ねられます。",
+  mapName:
+    "地図の名前：法務省の地図XML のファイル名（市区町村コード-法務局の番号-通し番号）。この道具は中心線の周りの筆しか残していないので、周りを広く見たいときは、取得したデータセットの zip の中にあるこの名前の XML（または手順 2 で「残す幅」を 500〜1000m にして取り直す）を見ます。",
   fix: "直す：Claude の判定を人の目で直します。直した区切りは「人」と記録され、地図では青い枠、一覧表では「決めたのは：人」になります。元に戻すこともできます。「全部を判定し直す」でも人が直した区切りは上書きしません。",
 };
 
 /* ---------- 手順 ---------- */
+
+let renderedStep = 0;
 
 function renderStep(state: AppState) {
   renderSteps(state.step, (n) => {
@@ -528,6 +539,10 @@ function renderStep(state: AppState) {
   });
   const s = STEPS[state.step - 1];
   const body = document.getElementById("step-body")!;
+  // 手順が変わったときだけ上に戻す（同じ手順の描き直しでは、読んでいた所を保つ）。
+  // 前の手順で下まで送っていると、次の手順が途中（余裕幅の欄など）から見えて「それが先頭」に見えた（2026-11-04）
+  const changed = renderedStep !== state.step;
+  renderedStep = state.step;
   const parts: string[] = [`<h3>${s.n}. ${s.title}</h3><p>${s.hint}</p>`];
   switch (state.step) {
     case 1:
@@ -624,6 +639,7 @@ function renderStep(state: AppState) {
     }
   }
   body.innerHTML = parts.join("");
+  if (changed) body.scrollTop = 0;
   if (state.step === 1) wireProjectStep(state, body);
   if (state.step === 2) wireTrackStep(state, body);
   body.querySelectorAll<HTMLButtonElement>("[data-go]").forEach((b) =>
@@ -919,6 +935,7 @@ async function pickOsm(state: AppState, lonLat: LonLat) {
   o.error = null;
   state.map.getCanvas().style.cursor = "";
   renderStep(state);
+  showBusy("OpenStreetMap から道路を取っています（混んでいると 1 分ほど）…");
   try {
     const ways = await fetchRoads(routeBbox(o.start, o.end));
     if (!ways.length) throw new Error("この辺りに OpenStreetMap の道路がありません。「手で描く」で引いてください");
@@ -937,6 +954,7 @@ async function pickOsm(state: AppState, lonLat: LonLat) {
     state.map.getCanvas().style.cursor = "crosshair";
   } finally {
     o.busy = false;
+    hideBusy();
     showDraft(state);
     renderStep(state);
   }
@@ -1267,7 +1285,7 @@ function describeParcels(state: AppState): string {
   const pub = s.maps.filter((m) => m.isPublic).length;
   const arb = s.maps.length - pub;
   const cities = [...new Set(s.maps.filter((m) => m.city).map((m) => m.city))];
-  return `${s.fileName}${cities.length ? `（${cities.join("・")}）` : ""}：地図 ${s.maps.length} 枚（公共座標系 ${pub}${arb ? `・任意座標系 ${arb} は読み飛ばし` : ""}）、区間の両側 ${PARCEL_BUFFER_M}m の筆 ${state.parcels.length}`;
+  return `${s.fileName}${cities.length ? `（${cities.join("・")}）` : ""}：地図 ${s.maps.length} 枚（公共座標系 ${pub}${arb ? `・任意座標系 ${arb} は読み飛ばし` : ""}）、区間の両側 ${s.bufferM ?? PARCEL_BUFFER_M}m の筆 ${state.parcels.length}`;
 }
 
 function renderParcelStep(state: AppState): string {
@@ -1281,9 +1299,11 @@ function renderParcelStep(state: AppState): string {
     parts.push(`<div class="progress"><i style="width:${run.total ? (100 * run.bytes) / run.total : 0}%"></i></div>`);
     parts.push(`<p class="small">${escapeHtml(run.label)}… ${mb(run.bytes)} / ${run.total ? mb(run.total) : "?"} MB。地図 ${run.maps} 枚、区間の周りの筆 ${run.kept}${run.current ? `<br><span class="muted">${escapeHtml(run.current)}</span>` : ""}</p>`);
   } else if (fr) {
-    parts.push(renderFetch(fr));
+    parts.push(renderFetch(state, fr));
   } else {
-    parts.push(`<div class="actions"><button class="btn primary" data-fetch-start>公図を自動で取得する</button></div><p class="muted small" style="margin:-4px 0 8px">中心線が通る市町村を調べ、法務省の地図データを探します ${help(HELP.mojfetch)}</p>`);
+    parts.push(`<div class="actions"><button class="btn primary" data-fetch-start>公図を自動で取得する</button></div>`);
+    parts.push(`<p class="muted small">中心線が通る市町村を調べ、法務省の地図データを探して取得します ${help(HELP.mojfetch)}</p>`);
+    parts.push(`<label class="field"><span>残す幅（中心線の両側）</span><select name="parcelBuffer" data-parcel-buffer>${[200, 500, 1000].map((b) => `<option value="${b}" ${b === state.parcelBuffer ? "selected" : ""}>${b} m</option>`).join("")}</select></label>`);
     parts.push(`<div class="dropzone" data-parcel-drop>または、ここに公図（地図XML の zip）を落とす<br><input type="file" accept=".zip,.xml" data-parcel-file></div>`);
     if (state.parcelError) parts.push(`<p class="small err">${escapeHtml(state.parcelError)}</p>`);
     if (s.fromFile && s.maps.length) {
@@ -1297,16 +1317,16 @@ function renderParcelStep(state: AppState): string {
     }
   }
   parts.push(
-    `<p class="muted small">法務省「登記所備付地図データ」の zip をそのまま落とせます（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${PARCEL_BUFFER_M}m の筆と中心線を包む筆だけを残します。170MB ほどの地図でも数秒。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
+    `<p class="muted small">法務省「登記所備付地図データ」の zip をそのまま落とせます（中の地図の zip 1 つや .xml 1 つでも）。地図を全部読み、区間の両側 ${state.parcelBuffer}m の筆と中心線を包む筆だけを残します（幅を広げると周りの筆も見られます。1000m なら筆は数倍、読み込みと保存もその分）。170MB ほどの地図でも数秒。ファイルはこの端末の外へ出しません。任意座標系の地図は位置を合わせられないので読み飛ばします。</p>`,
   );
   return parts.join("");
 }
 
 /** 公図の自動取得の途中の画面：市町村 → データセット → 同意 → 取得 */
-function renderFetch(fr: FetchRun): string {
+function renderFetch(state: AppState, fr: FetchRun): string {
   const parts: string[] = [];
   if (fr.phase === "cities") {
-    parts.push(`<p class="small">中心線と両側 ${PARCEL_BUFFER_M}m の点（100m ごと）がどの市町村にあるかを OpenStreetMap で調べ、G空間情報センターでデータセットを探しています…</p>`);
+    parts.push(`<p class="small">中心線と両側 ${state.parcelBuffer}m の点（100m ごと）がどの市町村にあるかを OpenStreetMap で調べ、G空間情報センターでデータセットを探しています…</p>`);
     parts.push(`<div class="actions"><button class="btn" data-fetch-cancel>やめる</button></div>`);
     return parts.join("");
   }
@@ -1354,6 +1374,10 @@ function wireParcelStep(state: AppState, body: HTMLElement) {
     updateAttribution(state);
   });
   body.querySelector("[data-fetch-start]")?.addEventListener("click", () => startFetch(state));
+  body.querySelector<HTMLSelectElement>("[data-parcel-buffer]")?.addEventListener("change", (e) => {
+    state.parcelBuffer = Number((e.target as HTMLSelectElement).value) || 200;
+    localStorage.setItem(BUFFER_KEY, String(state.parcelBuffer));
+  });
   body.querySelector("[data-fetch-cancel]")?.addEventListener("click", () => {
     if (state.fetchRun?.phase === "download") return; // 取得の途中は止めない（ワーカーが終わるまで）
     state.fetchRun = null;
@@ -1380,11 +1404,13 @@ async function startFetch(state: AppState) {
   state.fetchRun = fr;
   state.parcelError = null;
   renderStep(state);
+  showBusy("中心線が通る市町村を OpenStreetMap に聞いています（混んでいると 1 分ほど）…");
   try {
-    const munis = await findMunicipalities(samplePoints(state.centerline.coords, 100, PARCEL_BUFFER_M));
+    const munis = await findMunicipalities(samplePoints(state.centerline.coords, 100, state.parcelBuffer));
     if (state.fetchRun !== fr) return;
     if (!munis.length) throw new Error("市町村を当てられませんでした（OpenStreetMap の行政境界が無い所か、通信の問題）。下で市町村の名前を足してください");
     for (const muni of munis) {
+      showBusy(`${muni.name} の公図のデータセットを G空間情報センターで探しています…`);
       let dataset: MojDataset | null = null;
       let error: string | null = null;
       try {
@@ -1397,6 +1423,8 @@ async function startFetch(state: AppState) {
     }
   } catch (e) {
     fr.error = (e as Error).message;
+  } finally {
+    hideBusy();
   }
   if (state.fetchRun !== fr) return;
   fr.phase = "choose";
@@ -1452,12 +1480,12 @@ async function downloadAll(state: AppState) {
   state.fetchRun = null;
   const failed = fr.items.filter((it) => !it.done && it.error).map((it) => `${it.muni.name}（${it.error}）`);
   if (!fr.features.length) {
-    state.parcelError = `公図を取得しましたが、この区間の両側 ${PARCEL_BUFFER_M}m に筆がありません${failed.length ? `。失敗：${failed.join("、")}` : "（公共座標系の地図が無いのかもしれません）"}`;
+    state.parcelError = `公図を取得しましたが、この区間の両側 ${state.parcelBuffer}m に筆がありません${failed.length ? `。失敗：${failed.join("、")}` : "（公共座標系の地図が無いのかもしれません）"}`;
     renderStep(state);
     return;
   }
   // 見本の筆と足さない：取得した筆だけにする（同じ市町村なら同じ筆の id になり、重なるため）
-  state.parcelSource = { fromFile: true, fileName: fr.sources.map((s) => s.zip).join("・"), maps: fr.maps, skipped: fr.skipped, sources: fr.sources };
+  state.parcelSource = { fromFile: true, fileName: fr.sources.map((s) => s.zip).join("・"), maps: fr.maps, skipped: fr.skipped, sources: fr.sources, bufferM: state.parcelBuffer };
   state.parcelError = failed.length ? `取得できなかった市町村：${failed.join("、")}。手で zip を落とすか、あとでもう一度` : null;
   applyParcels(state, fr.features);
   updateAttribution(state);
@@ -1474,11 +1502,11 @@ async function importParcels(state: AppState, file: File) {
     if (!m.features.length) {
       throw new Error(
         pub.length
-          ? `${file.name} を読みましたが（地図 ${m.maps.length} 枚）、この区間の両側 ${PARCEL_BUFFER_M}m に筆がありません。別の市町村の地図かもしれません。`
+          ? `${file.name} を読みましたが（地図 ${m.maps.length} 枚）、この区間の両側 ${state.parcelBuffer}m に筆がありません。別の市町村の地図かもしれません。`
           : `${file.name} の地図 ${m.maps.length} 枚は全部任意座標系で、位置を合わせないと重なりません（まだ対応していません）。`,
       );
     }
-    state.parcelSource = { fromFile: true, fileName: file.name, maps: m.maps, skipped: m.skipped, sources: [] };
+    state.parcelSource = { fromFile: true, fileName: file.name, maps: m.maps, skipped: m.skipped, sources: [], bufferM: state.parcelBuffer };
     applyParcels(state, m.features);
     updateAttribution(state);
     console.info(`公図を読んだ：${file.name}、地図 ${m.maps.length} 枚、筆 ${m.features.length}（${m.ms}ms）`);
@@ -1513,7 +1541,7 @@ function runParcelWorker(state: AppState, source: WorkerSource, label: string): 
       finish();
       reject(new Error(e.message));
     };
-    worker.postMessage({ source, dense: state.dense, bufferM: PARCEL_BUFFER_M, zone: state.zone } satisfies WorkerIn);
+    worker.postMessage({ source, dense: state.dense, bufferM: state.parcelBuffer, zone: state.zone } satisfies WorkerIn);
   });
 }
 
@@ -1875,6 +1903,14 @@ function refreshKps(state: AppState) {
 }
 
 /** 起点からの距離 m の KP の表示。距離標が足りなければ空 */
+/** 筆の地図（XML）を含むデータセットのページへのリンク。元の公図を広く見たいとき、zip の中のその XML を探せる */
+function mapLink(state: AppState, stem: string): string {
+  const demo = !state.parcelSource.fromFile && state.centerline.source.kind === "demo";
+  const url = demo ? DEMO_MOJ.url : state.parcelSource.sources.find((x) => stem.startsWith(x.code))?.datasetUrl ?? state.parcelSource.sources[0]?.datasetUrl;
+  if (!url) return "";
+  return `<br><a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="small">データセット（zip の中の ${escapeHtml(stem)}.xml）↗</a>`;
+}
+
 function kpText(state: AppState, m: number): string {
   const est = estimateKp(state.kps, m);
   return est ? `${escapeHtml(formatKp(state.roadName, est))}<br><span class="muted small">${escapeHtml(est.basis)}</span>` : `<span class="muted">距離標を 2 本以上置くと出ます（手順 6）</span>`;
@@ -1927,7 +1963,7 @@ function selectParcel(state: AppState, id: string, fly: boolean) {
       ${h ? `<dt>KP（推定）</dt><dd>${kpText(state, (h.fromM + h.toM) / 2)}</dd>` : ""}
       <dt>外で見る</dt><dd>${earthLink(ringCenter(h ? h.shape.coordinates[0][0] : p.geometry.coordinates[0]))}</dd>
       ${h ? `<dt>森林の区域</dt><dd>${state.forest ? escapeHtml(forestText(state.forest.get(h.parcelId))) + (noticeText(state.forest.get(h.parcelId)) ? `<br><span class="badge low">届出が要るかもしれない（市町村に確かめる）</span>` : "") : `<span class="muted">${escapeHtml(state.forestNote)}</span>`} ${help(HELP.forest)}</dd>` : ""}
-      <dt>地図</dt><dd>${escapeHtml(p.properties.map)}</dd>
+      <dt>地図</dt><dd>${escapeHtml(p.properties.map)} ${help(HELP.mapName)}${mapLink(state, p.properties.map)}</dd>
     </dl>
     <p class="muted small" style="margin-top:10px">公図は「おおよその位置と隣接関係」を示す図面です。境界は現地と違うことがあります。</p>`,
   );

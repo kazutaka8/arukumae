@@ -225,14 +225,28 @@ function wireResizer(root: HTMLElement) {
   one("#steps-resizer", "#steps-col", "--steps-w", STEPS_W_KEY, 220, 520);
 }
 
-/** 画面が止まる計算の前に出す知らせ。描かれてから計算を始めるよう、呼ぶ側は setTimeout で一拍置く */
+/**
+ * 時間のかかる処理の知らせ（中央上）。描かれてから計算を始めるよう、画面を止める計算の前では呼ぶ側が setTimeout で一拍置く。
+ * 経過の秒を出す：何秒も待たされると止まったように見えて不安になる、と言われた（2026-11-04）。
+ * 通信（市町村を当てる・公図を探す）のように終わりの分からない待ちにも使う
+ */
+let busyTimer: ReturnType<typeof setInterval> | null = null;
 export function showBusy(text: string) {
   const el = document.getElementById("busy")!;
-  el.textContent = text;
+  const started = Date.now();
+  const draw = () => {
+    const sec = Math.round((Date.now() - started) / 1000);
+    el.innerHTML = `<span class="spin" aria-hidden="true"></span><span>${escapeHtml(text)}</span><span class="sec">${sec >= 2 ? `${sec} 秒` : ""}</span>`;
+  };
+  if (busyTimer) clearInterval(busyTimer);
+  draw();
+  busyTimer = setInterval(draw, 1000);
   el.hidden = false;
 }
 
 export function hideBusy() {
+  if (busyTimer) clearInterval(busyTimer);
+  busyTimer = null;
   document.getElementById("busy")!.hidden = true;
 }
 

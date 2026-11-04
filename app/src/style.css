@@ -83,8 +83,11 @@ html, body, #app { margin: 0; height: 100%; background: var(--bg); }
 .btn:active { transform: scale(0.985); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #a21f23; }
-.btn.next { font-weight: 600; justify-content: space-between; display: flex; align-items: center; }
-.btn.next::after { content: "→"; color: var(--muted); margin-left: 10px; }
+/* 次へ：濃紺の塗り（上の帯と同じ色）。薄い枠だけだと「押せない」と見えた（2026-11-04）。赤は手順の中の主な操作に取っておく */
+.btn.next { font-weight: 600; justify-content: space-between; display: flex; align-items: center; background: var(--navy); border-color: var(--navy); color: #fff; }
+.btn.next:hover { background: #18284a; }
+.btn.next::after { content: "→"; color: rgba(255, 255, 255, 0.7); margin-left: 10px; }
+.btn.primary.next { background: var(--accent); border-color: var(--accent); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn.ghost:hover { background: var(--surface-2); color: var(--ink); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
@@ -322,7 +325,10 @@ table.list td.note-cell.ok { color: var(--ok); }
 table.list td.note-cell.ng { color: var(--accent); }
 
 /* 画面が止まる計算の知らせ（中央上） */
-.busy { position: fixed; left: 50%; top: calc(var(--topbar-h) + 14px); transform: translateX(-50%); z-index: 60; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 12.5px; box-shadow: var(--shadow); max-width: 90vw; }
+.busy { position: fixed; left: 50%; top: calc(var(--topbar-h) + 14px); transform: translateX(-50%); z-index: 60; background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow); max-width: 90vw; display: flex; align-items: center; gap: 10px; }
+.busy .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.3); border-top-color: #fff; animation: spin 0.8s linear infinite; flex: none; }
+.busy .sec { color: rgba(255, 255, 255, 0.6); font-variant-numeric: tabular-nums; min-width: 2.5em; text-align: right; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- スマホ幅（想定の外だが、崩れない程度に）----------
  * 手順と一覧は下の引き出しに 1 列ずつ（一覧を出すと手順は隠れる）。凡例は最初たたむ（panels.ts） */

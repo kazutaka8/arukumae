@@ -72,8 +72,13 @@ export function validateCenterline(coords: LonLat[]): string | null {
   return null;
 }
 
-/** 道路名の候補を線の名前から拾う。「中心線」などの言葉を除いた残り。何もなければ空 */
+/**
+ * 道路名の候補を線の名前から拾う。「中心線」などの言葉を除いた残り。何もなければ空。
+ * Google マイマップの「ルート」の線は「〒… A から … B へのルート」のように住所が名前になる。
+ * 住所は道路名ではなく、画面の上やファイル名に出すものでもないので、捨てる（2026-11-04 に試しで分かった）
+ */
 export function roadNameFromLine(name: string): string {
+  if (/へのルート|〒|Directions from|^Route/i.test(name)) return "";
   return name.replace(CENTER_WORDS, "").replace(/[（(].*?[)）]/g, "").replace(/[_\-－ー・:：\s]+$/g, "").trim();
 }
 

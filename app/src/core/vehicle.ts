@@ -126,14 +126,63 @@ export function extendLine(dense: EN[], before: number, after: number): EN[] {
 }
 
 /**
- * 車両を中心線に沿って 1m ずつ進め、車体とブレードの縁の点を中心線の最寄りの点に投影して、左右の最大を取る。
- * 縁は角だけでなく 1m ごとに拾う。ヘアピンの内側ではブレードが弦のように横切り、いちばん内側に来るのは角ではなく途中だから。
+ * 車両を中心線に沿って 1m ずつ進め、車体とブレードが掃いた面（各歩の形と、1 歩前からの動きを合わせた凸包）を集め、
+ * 中心線の各点の法線でその面を横切って、道路から続く範囲の左右の端を取る。
  *
- * 縁の点は「1 歩前の位置」から「いまの位置」までの道のりも STEP_M ごとに拾う（軌跡の補間）。
- * 車両が 1m 進む間に、ヘアピンの外側ではブレードの先が 3m 以上動く。点だけ拾うと、先が飛び越した所の区切りには
- * 根元寄りの点しか当たらず、掃く幅が 50m → 20m → 50m と暴れて縁がギザギザになった（2026-11-03 に見本の 760m 付近で確認）
+ * 2026-11-04 まで：縁の点を「法線が通る最寄りの点」に投影して左右の最大を取っていた。
+ * ヘアピンでは、点が飛び越した区切りに何も当たらず幅が 1〜2m に落ちる穴や、隣と 60m 違う段ができ、
+ * 画面では軌跡の帯が欠けて見えた（2026-11-04 に別の道で確認。見本でも 14 か所あった）。
+ * 面を横切る形なら、動く物が通った所は必ず連続して埋まるので、穴が出ない。
+ *
+ * 法線は無限に伸びるので、ヘアピンの反対側の脚にいる車両を拾わないように、
+ * (1) 見る歩は「その点の少し手前から、車両の長さ＋30m 先まで」に限り、
+ * (2) 法線の上で道路（中心）から切れ目なく（1m 以下の隙間まで）続く範囲だけを掃いた幅にする。
+ * 脚と脚の間の土地は掃かれないので、向こうの脚の車両は切れ目の先になり、数えない
  */
-const STEP_M = 0.5;
+const GAP_M = 1.0;
+
+/** 凸包（Andrew の単調連鎖）。1 歩の形と 1 歩前の形を合わせた面に使う。点は 8 つなので速さは問わない */
+function hull(pts: EN[]): EN[] {
+  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cross = (o: EN, a: EN, b: EN) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: EN[] = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  const upper: EN[] = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+/** 点 P を通り向き N の直線が凸多角形を横切る区間 [dmin, dmax]（N の向きが正）。横切らなければ null */
+function crossConvex(P: EN, N: EN, poly: EN[]): [number, number] | null {
+  let dmin = Infinity;
+  let dmax = -Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const A = poly[i];
+    const B = poly[(i + 1) % poly.length];
+    const ex = B[0] - A[0];
+    const ey = B[1] - A[1];
+    const det = ex * N[1] - N[0] * ey;
+    if (Math.abs(det) < 1e-9) continue;
+    const wx = A[0] - P[0];
+    const wy = A[1] - P[1];
+    const u = (N[0] * wy - N[1] * wx) / det;
+    if (u < -1e-9 || u > 1 + 1e-9) continue;
+    const d = (ex * wy - ey * wx) / det;
+    if (d < dmin) dmin = d;
+    if (d > dmax) dmax = d;
+  }
+  return dmin <= dmax ? [dmin, dmax] : null;
+}
 
 export function sweepVehicle(dense: EN[], normals: EN[], v: Vehicle, zones: TiltZone[] = []): Sweep {
   const n = dense.length;
@@ -153,59 +202,22 @@ export function sweepVehicle(dense: EN[], normals: EN[], v: Vehicle, zones: Tilt
     const z = zones.find((z) => near.index >= z.fromM && near.index <= z.toM);
     return z ? bladeHorizontal(v, z.tilt) : lhBase;
   };
-
-  /**
-   * 縁の点 p を、その点を法線が通る区切り（最寄りの点の前後 WINDOW 個のうち、法線から 1m 以内のもの）に投影する。
-   * 「最寄りの点だけ」に投影すると、中心線の折れ（OSM の頂点）の外側で折れの点が広い扇を独り占めし、
-   * 隣の点には縁の低い所しか当たらず、幅が 5m ごとに落ちるノコギリになった（2026-11-03）。
-   * 法線が通る点ごとに測れば、曲がりの外側の包絡線を各点の法線の向きで正しく測れる
-   */
-  const hit = (p: EN) => {
-    const near = index.nearest(p, 150);
-    if (!near) return;
-    // 見る範囲は遠い点ほど広く。折れの外側では「最寄りの点」と「法線が通る点」が、折れの角度 × 距離 ぶん離れる
-    // （50m 先で 20° の折れなら 17 点ほど）。近い点は狭くて済むので、距離に比例させて計算を抑える
-    const window = 8 + Math.ceil(near.dist * 0.6);
-    const lo = Math.max(0, near.index - window);
-    const hi = Math.min(n - 1, near.index + window);
-    for (let s = lo; s <= hi; s++) {
-      const dx = p[0] - dense[s][0];
-      const dy = p[1] - dense[s][1];
-      const [nx, ny] = normals[s];
-      // 接線方向のずれ（左の法線 [nx, ny] → 進行方向は [ny, -nx]）。
-      // 許す幅は遠い点ほど広く：急カーブの外側では隣の法線が 50m 先で 3m 以上開くので、幅が一定だと縁の点を取りこぼす所ができる
-      const d = dx * nx + dy * ny;
-      const t = dx * ny - dy * nx;
-      const tol = 1.5 + 0.03 * Math.abs(d);
-      if (t > tol || t < -tol) continue;
-      if (d > left[s]) left[s] = d;
-      else if (-d > right[s]) right[s] = -d;
-    }
-  };
-  /** 台形の長い2辺を 1m ごとに拾い、out に足す。a→b が軸、幅は wa から wb へ変わる。点の順はいつも同じ（補間で対応を取るため） */
-  const quad = (out: EN[], a: EN, b: EN, wa: number, wb: number) => {
+  /** 台形の 4 隅。a→b が軸、幅は wa から wb へ変わる */
+  const quad = (a: EN, b: EN, wa: number, wb: number): EN[] => {
     const axis = sub(b, a);
-    const L = Math.hypot(axis[0], axis[1]);
-    if (L < 1e-6) return;
-    const ax = mul(axis, 1 / L);
-    const nrm: EN = [-ax[1], ax[0]];
-    // round にする：ceil だと、長さ 60 のブレードが浮動小数の誤差で 60.0000001 になり点の数が歩ごとに変わって、補間が効かなかった
-    const steps = Math.max(1, Math.round(L));
-    for (let k = 0; k <= steps; k++) {
-      const t = k / steps;
-      const c = add(a, mul(ax, t * L));
-      const w = (wa + (wb - wa) * t) / 2;
-      out.push(add(c, mul(nrm, w)));
-      out.push(sub(c, mul(nrm, w)));
-    }
+    const L = Math.hypot(axis[0], axis[1]) || 1e-6;
+    const nrm: EN = [-axis[1] / L, axis[0] / L];
+    return [add(a, mul(nrm, wa / 2)), add(b, mul(nrm, wb / 2)), sub(b, mul(nrm, wb / 2)), sub(a, mul(nrm, wa / 2))];
   };
 
-  // 初期状態：起点の手前で車両がまっすぐ並んでいる
+  // 歩ごとの掃いた面（トラクタ・台車・ブレードの 3 つ。1 歩前の形と合わせた凸包）
+  const faces: EN[][][] = [];
   const h0 = unit(sub(path[1], path[0]));
   let F = path[0];
   let A = sub(F, mul(h0, v.tractorWheelbase));
   let T = sub(A, mul(h0, v.kingpinToAxle));
-  let prev: EN[] | null = null;
+  let prev: EN[][] | null = null;
+  faces.push([]);
   for (let i = 1; i < path.length; i++) {
     F = path[i];
     A = follow(F, A, v.tractorWheelbase);
@@ -213,24 +225,56 @@ export function sweepVehicle(dense: EN[], normals: EN[], v: Vehicle, zones: Tilt
     T = follow(K, T, v.kingpinToAxle);
     const ht = unit(sub(F, A));
     const hr = unit(sub(K, T));
-    const cur: EN[] = [];
-    // トラクタ：前のはみ出しから、駆動軸の 1m 後ろまで
-    quad(cur, add(F, mul(ht, v.tractorFront)), sub(A, mul(ht, 1.0)), v.tractorWidth, v.tractorWidth);
-    // 台車：グースネックの前端から後端まで
-    quad(cur, add(K, mul(hr, v.trailerFront)), sub(T, mul(hr, v.trailerTail)), v.trailerWidth, v.trailerWidth);
-    // ブレード：根元から後ろへ、水平の投影の長さだけ。幅は根元の直径から先の幅へ細る
     const root = sub(K, mul(hr, v.bladeRootAt));
-    quad(cur, root, sub(root, mul(hr, lhAt(root))), v.bladeRootDia, v.bladeTipWidth);
-    // 1 歩前の同じ点からの道のりも拾う。起立の区間の境でブレードの長さが変わると点の数が合わないので、その歩は点だけ
-    if (prev && prev.length === cur.length) {
-      for (let k = 0; k < cur.length; k++) {
-        const d = sub(cur[k], prev[k]);
-        const n = Math.ceil(Math.hypot(d[0], d[1]) / STEP_M);
-        for (let j = 1; j < n; j++) hit(add(prev[k], mul(d, j / n)));
+    const cur: EN[][] = [
+      // トラクタ：前のはみ出しから、駆動軸の 1m 後ろまで
+      quad(add(F, mul(ht, v.tractorFront)), sub(A, mul(ht, 1.0)), v.tractorWidth, v.tractorWidth),
+      // 台車：グースネックの前端から後端まで
+      quad(add(K, mul(hr, v.trailerFront)), sub(T, mul(hr, v.trailerTail)), v.trailerWidth, v.trailerWidth),
+      // ブレード：根元から後ろへ、水平の投影の長さだけ。幅は根元の直径から先の幅へ細る
+      quad(root, sub(root, mul(hr, lhAt(root))), v.bladeRootDia, v.bladeTipWidth),
+    ];
+    faces.push(prev ? cur.map((q, k) => hull([...prev![k], ...q])) : cur);
+    prev = cur;
+  }
+
+  // 各点の法線で面を横切り、道路から切れ目なく続く範囲の端を取る
+  const ahead = Math.ceil(rearExtent + 30);
+  const behind = Math.ceil(v.tractorFront + 30);
+  for (let s = 0; s < n; s++) {
+    const P = dense[s];
+    const N = normals[s];
+    const spans: [number, number][] = [];
+    const i0 = Math.max(1, s + ext - behind);
+    const i1 = Math.min(path.length - 1, s + ext + ahead);
+    for (let i = i0; i <= i1; i++) {
+      for (const poly of faces[i]) {
+        const c = crossConvex(P, N, poly);
+        if (c) spans.push(c);
       }
     }
-    for (const p of cur) hit(p);
-    prev = cur;
+    if (!spans.length) continue;
+    spans.sort((a, b) => a[0] - b[0]);
+    // 0（中心線）を含む（または 1m 以内の隙間でつながる）範囲だけを取る
+    let lo = NaN;
+    let hi = NaN;
+    for (const [a, b] of spans) {
+      if (Number.isNaN(lo)) {
+        if (a > GAP_M) break; // 中心線を含む区間がない（車両はまだ来ていない）
+        lo = a;
+        hi = b;
+        continue;
+      }
+      if (a <= hi + GAP_M) hi = Math.max(hi, b);
+      else if (hi < -GAP_M) {
+        // まだ中心線に届いていない区間だった。次へ
+        lo = a;
+        hi = b;
+      } else break;
+    }
+    if (Number.isNaN(lo) || lo > GAP_M || hi < -GAP_M) continue;
+    if (hi > 0) left[s] = hi;
+    if (lo < 0) right[s] = -lo;
   }
   return { left, right };
 }
