@@ -1517,7 +1517,11 @@ async function downloadAll(state: AppState) {
   }
   // 見本の筆と足さない：取得した筆だけにする（同じ市町村なら同じ筆の id になり、重なるため）
   state.parcelSource = { fromFile: true, fileName: fr.sources.map((s) => s.zip).join("・"), maps: fr.maps, skipped: fr.skipped, sources: fr.sources, bufferM: state.parcelBuffer };
-  state.parcelError = failed.length ? `取得できなかった市町村：${failed.join("、")}。手で zip を落とすか、あとでもう一度` : null;
+  // 片方だけ失敗したときに「手で zip を落とす」と案内していたが、手で落とすと筆を入れ替える（importParcels）ので、
+  // 取得できた市町村の筆まで消えた（Codex の提案 2026-11-06）。足す作りにはせず、全部を取り直すよう案内する
+  state.parcelError = failed.length
+    ? `取得できなかった市町村：${failed.join("、")}。この市町村の筆は入っていません。あとでもう一度「自動で取得」で全部を取り直してください（手で zip を落とすと、取得できた市町村の筆も置き換わります）`
+    : null;
   applyParcels(state, fr.features);
   updateAttribution(state);
 }

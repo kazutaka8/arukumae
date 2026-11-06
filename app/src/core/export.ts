@@ -29,6 +29,8 @@ export interface ListRow {
   森林の区域: string;
   伐採の届出の目印: string;
   備考: string;
+  /** 筆が入っていた地図の名前（頭が市区町村コード）。CSV の列には出さない（COLUMNS に無い）。買うリストで市町村をまたいでまとめないために持つ */
+  地図: string;
 }
 
 export const COLUMNS: (keyof ListRow)[] = [
@@ -87,7 +89,8 @@ export function buildRows(
       決めたのは: js.length ? (js.some((j) => j.by === "人") ? (js.every((j) => j.by === "人") ? "人" : "人・Claude") : "Claude") : "",
       森林の区域: forest ? forestText(forest.get(h.parcelId)) : "",
       伐採の届出の目印: forest ? noticeText(forest.get(h.parcelId)) : "",
-      備考: remark(js),
+      備考: [remark(js), js.length && segmentsOverlap(h) ? OVERLAP_NOTE : ""].filter(Boolean).join("。"),
+      地図: p.map,
     };
   });
 }
@@ -98,6 +101,20 @@ function remark(js: Judgment[]): string {
   if (!years.length) return "";
   const changes = js.filter((j) => j.change && j.change !== "変化なし").map((j) => `${j.segmentId} ${j.change}`);
   return `${years.join("・")} 年度の写真と見比べて判定${changes.length ? `（${changes.join("、")}）` : ""}`;
+}
+
+/**
+ * つづら折りでは区切りどうしが重なる。かかる面積は重なりを除いて測るが、木のある面積は区切りごとの面積×割合の合計なので、
+ * 重なる分を二重に数える（木のある面積がかかる面積を超えることもある）。按分はまだ作っていないので、そうなる筆の備考に断りを出す
+ * （spec §8.3 に書いてあったが出ていなかった。Codex の提案 2026-11-06）
+ */
+export const OVERLAP_NOTE = "区切りが重なる所にかかるため、木のある面積（推定）は重なる分を二重に数えている";
+
+/** 筆にかかる区切りの面積の合計が、かかる面積（重なりを除いた値）より大きいか。丸めの差（1%＋0.5m²）は重なりと見ない */
+function segmentsOverlap(h: ParcelHit): boolean {
+  let sum = 0;
+  for (const id of h.segmentIds) sum += h.segAreas[id] ?? 0;
+  return sum > h.areaM2 * 1.01 + 0.5;
 }
 
 /** 「広葉樹 3・針葉樹 1」のように、多い順に数える */
@@ -134,7 +151,10 @@ export const BUY_COLUMNS: (keyof BuyRow)[] = ["所在", "地番", "地番の種�
 export function buildBuyList(rows: ListRow[]): BuyRow[] {
   const seen = new Map<string, BuyRow>();
   for (const r of rows) {
-    const key = `${r.所在}\t${r.地番}`;
+    // 市町村が違えば、大字名と地番が同じでも別の土地。まとめると買うリストから 1 件抜ける（Codex の指摘 2026-11-06）。
+    // 市町村は地図の名前の頭（市区町村コード 5 桁。法務省の地図は「20588-1000-6」の形）で分ける。その形でなければ地図ごとに分ける（まとめすぎない側）
+    const city = /^\d{5}(?=-)/.exec(r.地図)?.[0] ?? r.地図;
+    const key = `${city}\t${r.所在}\t${r.地番}`;
     const prev = seen.get(key);
     if (prev) {
       prev.かかる面積m2 = Math.round((prev.かかる面積m2 + r.かかる面積m2) * 10) / 10;

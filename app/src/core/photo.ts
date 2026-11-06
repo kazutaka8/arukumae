@@ -60,6 +60,11 @@ export function metersPerPx(lat: number, z = Z): number {
 }
 
 // タイルの写しはページを開いている間だけ持つ。同じ窓を判定し直すときに、もう一度取りに行かないため
+// 【分かっている穴。提出のあとに直す（2026-11-06 に見送りと決めた。docs/spec.md §14）】
+// 取得の失敗（通信が切れた・取得先が一時的に止まった）も null として覚えるので、通信が戻っても同じタイルを取り直さない。
+// 判定の側（main.ts の runJudging）は最新写真の欠け（coverage）を見ずに Claude へ送るので、欠けた写真のまま費用がかかる。
+// 直すなら：失敗は覚えない（r.ok でない・例外のときは tileCache から外す）。写真が欠けた窓は判定せず、未判定に残す。
+// 写真が元から無い所（海など）と、取得の失敗を分ける手がかりは HTTP の 404 とそれ以外
 const tileCache = new Map<string, Promise<ImageBitmap | null>>();
 
 export function fetchTile(z: number, x: number, y: number, layer: PhotoLayer = LATEST): Promise<ImageBitmap | null> {

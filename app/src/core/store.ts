@@ -42,6 +42,13 @@ function request<T>(r: IDBRequest<T>): Promise<T> {
 /**
  * 残してある案件（形は検めない。読んだあと parseProject 相当の検めを通す）。
  * IndexedDB と localStorage（書く側の落とし先）の両方を見て、保存の日時が新しいほうを返す（newerOf）
+ *
+ * 【分かっている穴。提出のあとに直す（2026-11-06 に見送りと決めた。docs/spec.md §14）】
+ * IndexedDB の読み込みに失敗すると、ここは「案件なし」と同じ null を返す。呼ぶ側は見本を開き、そのあと何かを変えると
+ * 見本が同じ置き場に書かれて、元の案件（判定・距離標・現地の記録）を上書きする。起きるのは、この読み込みだけが失敗し、
+ * 同じ回の書き込みは成功するとき（書き込みも失敗すれば localStorage に落ち、IndexedDB の元の記録は残る）。
+ * 直すなら：読み込みの失敗と「まだ無い」を分けて返し、失敗した回は端末に書かずに「開き直してください」と出す。
+ * そのとき、IndexedDB が元から使えない環境では毎回が「失敗」になり、localStorage への落とし先が使えなくなる点を決める
  */
 export async function loadStored(): Promise<unknown | null> {
   let fromDb: unknown = null;

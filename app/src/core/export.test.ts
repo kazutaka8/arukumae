@@ -98,6 +98,33 @@ describe("公図を買うリスト", () => {
     expect(csv.startsWith("﻿" + BUY_COLUMNS.join(","))).toBe(true);
     expect(csv).toContain("大字稲丘,2303-1,一般,320〜360m,左,,170,,,");
   });
+
+  it("市町村が違えば、大字名と地番が同じでもまとめない（Codex の指摘 2026-11-06：買うリストから 1 件抜けた）", async () => {
+    const { buildBuyList } = await import("./export");
+    const two = new Map<string, { properties: ParcelProps }>([
+      ["20588-1000-6:1", { properties: { id: "20588-1000-6:1", map: "20588-1000-6", oaza: "大字境", chiban: "12", kind: "ふつう" } }],
+      ["20588-1000-18:9", { properties: { id: "20588-1000-18:9", map: "20588-1000-18", oaza: "大字境", chiban: "12", kind: "ふつう" } }], // 同じ村の別の地図
+      ["20590-1000-3:1", { properties: { id: "20590-1000-3:1", map: "20590-1000-3", oaza: "大字境", chiban: "12", kind: "ふつう" } }], // 隣の町
+    ]);
+    const rows = buildRows([{ ...hit, parcelId: "20588-1000-6:1", areaM2: 10 }, { ...hit, parcelId: "20588-1000-18:9", areaM2: 20 }, { ...hit, parcelId: "20590-1000-3:1", areaM2: 40 }], two, new Map(), [], "道");
+    const buy = buildBuyList(rows);
+    expect(buy.map((b) => b.かかる面積m2)).toEqual([30, 40]); // 同じ村の 2 つはまとまり、隣の町の 1 つは別の行
+  });
+});
+
+describe("木のある面積の断り（spec §8.3。区切りが重なる筆）", () => {
+  it("区切りの面積の合計がかかる面積を超える筆は、判定があれば備考に断りを出す。CSV に「地図」の列は出ない", async () => {
+    const { OVERLAP_NOTE } = await import("./export");
+    const over: ParcelHit = { ...hit, areaM2: 100 }; // 区切りの合計は 150
+    const judged = new Map([["L032", j("L032", 100, "高")]]);
+    expect(buildRows([over], parcels, judged, [], "道")[0].備考).toBe(OVERLAP_NOTE);
+    expect(buildRows([over], parcels, new Map(), [], "道")[0].備考).toBe(""); // 判定が無ければ木の面積も出ないので、断りも出さない
+    expect(buildRows([hit], parcels, judged, [], "道")[0].備考).toBe(""); // 重なりが無い筆（合計 150 ＝ かかる面積 150）
+    const two = new Map([["L032", { ...j("L032", 100, "高"), oldYear: "2019", change: "変化なし" as const }]]);
+    expect(buildRows([over], parcels, two, [], "道")[0].備考).toBe(`2019 年度の写真と見比べて判定。${OVERLAP_NOTE}`);
+    expect(COLUMNS).not.toContain("地図");
+    expect(toCsv(buildRows([over], parcels, judged, [], "道")).split("\r\n")[0]).not.toContain("地図");
+  });
 });
 
 describe("現地の記録の列", () => {
