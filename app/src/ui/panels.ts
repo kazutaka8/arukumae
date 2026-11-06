@@ -304,10 +304,25 @@ export function renderSteps(current: number, onSelect: (n: number) => void) {
   columnSync?.();
 }
 
+/**
+ * 手順のパネルが下の引き出しになっている幅か（style.css の @media (max-width: 820px) と同じ境。iPad の縦向き）。
+ * 引き出しは画面の幅いっぱいなので、その幅を左の余白にすると余白が画面より広くなり、MapLibre が移動をやめる
+ * （一覧の行を押しても地図が動かなかった。Codex の指摘 2026-11-06。768×1024 で確かめた）。下の余白として扱う
+ */
+function isDrawer(): boolean {
+  return window.matchMedia("(max-width: 820px)").matches;
+}
+
 /** 左のパネルが地図を隠している幅（px）。飛ぶ先をパネルの外に寄せるために使う */
 export function leftCover(): number {
   const panel = document.getElementById("steps-panel")!;
-  return panel.classList.contains("collapsed") ? 0 : panel.getBoundingClientRect().width + 20;
+  return panel.classList.contains("collapsed") || isDrawer() ? 0 : panel.getBoundingClientRect().width + 20;
+}
+
+/** 下の引き出しが地図を隠している高さ（px）。引き出しでない幅では 0 */
+export function bottomCover(): number {
+  const panel = document.getElementById("steps-panel")!;
+  return panel.classList.contains("collapsed") || !isDrawer() ? 0 : panel.getBoundingClientRect().height + 20;
 }
 
 export function rightCover(): number {

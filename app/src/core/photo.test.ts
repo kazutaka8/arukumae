@@ -42,4 +42,19 @@ describe("windowsOf", () => {
     expect(windowsOf(fakeSegments(20))).toHaveLength(1);
     expect(windowsOf(fakeSegments(21))).toHaveLength(2);
   });
+
+  it("区切りが途切れた所では窓を分ける（曲がりだけを描いた軌跡図。Codex の指摘 2026-11-06：8km 離れた 2 か所が 1 窓になった）", () => {
+    const all = fakeSegments(810);
+    const segs = all.filter((s) => s.fromM < 50 || s.fromM >= 8000); // 0〜50m と 8,000〜8,100m だけ
+    const w = windowsOf(segs);
+    expect(w).toHaveLength(2);
+    expect(w.map((x) => [x[0].fromM, x.at(-1)!.toM])).toEqual([[0, 50], [8000, 8100]]);
+    expect(w.flat()).toHaveLength(segs.length); // 漏れない
+    for (const x of w) expect(x.at(-1)!.toM - x[0].fromM).toBeLessThanOrEqual(200); // 1 窓は 200m まで
+  });
+
+  it("潰れた区切りを隣と合わせた所（20〜30m 空く）では分けない", () => {
+    const segs = fakeSegments(20).filter((s) => s.fromM !== 60 && s.fromM !== 70); // 60〜80m が合わさって抜けた形
+    expect(windowsOf(segs)).toHaveLength(1);
+  });
 });

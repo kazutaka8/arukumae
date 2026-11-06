@@ -208,18 +208,30 @@ function toJpeg(canvas: HTMLCanvasElement): string {
 
 /**
  * 区切りを「窓」に分ける。1窓は左右あわせて最大 maxPairs×2 区切り（既定 20 対＝200m。試しで Claude が40区切りを1回で読めた大きさ）。
- * 窓の数を先に決めてから均等に割る。端から 200m ずつ切ると最後の窓だけ 50m になり、写真が狭くて札が読みにくいため
+ * 窓の数を先に決めてから均等に割る。端から 200m ずつ切ると最後の窓だけ 50m になり、写真が狭くて札が読みにくいため。
+ *
+ * 区切りが途切れた所（次の区切りまで maxGapM より離れる）では、必ず窓を分ける。曲がりの所だけを描いた軌跡図を読むと、
+ * 区切りは曲がりごとの飛び飛びになる。数だけで割ると、数百 m〜数 km 離れた曲がりが 1 枚の写真・PDF の 1 ページにまとまり、
+ * 10m の区切りが読めない大きさになった（Codex の指摘 2026-11-06）。潰れた区切りを隣と合わせた所は 20〜30m 空くので、境は 50m
  */
-export function windowsOf(segments: Segment[], maxPairs = 20): Segment[][] {
+export function windowsOf(segments: Segment[], maxPairs = 20, maxGapM = 50): Segment[][] {
   // 「対」は同じ起点からの距離の左右。軌跡図によっては片側しかない所があるので、区切りの数ではなく距離の種類で数える
   const stations = [...new Set(segments.map((s) => s.fromM))].sort((a, b) => a - b);
-  const n = Math.max(1, Math.ceil(stations.length / maxPairs));
-  const per = Math.ceil(stations.length / n);
+  const runs: number[][] = [];
+  for (const st of stations) {
+    const run = runs.at(-1);
+    if (run && st - run.at(-1)! <= maxGapM) run.push(st);
+    else runs.push([st]);
+  }
   const out: Segment[][] = [];
-  for (let i = 0; i < stations.length; i += per) {
-    const group = new Set(stations.slice(i, i + per));
-    const w = segments.filter((s) => group.has(s.fromM));
-    if (w.length) out.push(w);
+  for (const run of runs) {
+    const n = Math.max(1, Math.ceil(run.length / maxPairs));
+    const per = Math.ceil(run.length / n);
+    for (let i = 0; i < run.length; i += per) {
+      const group = new Set(run.slice(i, i + per));
+      const w = segments.filter((s) => group.has(s.fromM));
+      if (w.length) out.push(w);
+    }
   }
   return out;
 }

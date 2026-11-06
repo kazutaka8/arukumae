@@ -60,3 +60,16 @@ export function formatKp(roadName: string, est: KpEstimate | null): string {
   if (!est) return "";
   return `${roadName} ${fmtKm(est.kp)}km 付近（推定）`;
 }
+
+/**
+ * 距離標の値の入力（km）を数にする。読めなければ null。
+ * 日本語入力のままの全角（「１２．３」）は半角に直して読む。前は「数字と点以外を消す」だけだったので、全角は全部消えて
+ * 空になり、Number("") の 0 がそのまま距離標の値として記録された（補間・一覧表・案件ファイルまで 0 が流れた。Codex の指摘 2026-11-06）。
+ * 「12.3km」「KP12.3」のような前後の字は許すが、数が 1 つに決まらない入力（「12,3」「1.2.3」・空）は断る
+ */
+export function parseKpInput(raw: string): number | null {
+  const m = /^[^\d.]*(\d+(?:\.\d+)?)[^\d.]*$/.exec(raw.normalize("NFKC").trim());
+  if (!m) return null;
+  const kp = Number(m[1]);
+  return Number.isFinite(kp) ? kp : null;
+}

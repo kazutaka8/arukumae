@@ -11,13 +11,14 @@ import type { LngLatBoundsLike, MapGeoJSONFeature, Map as MlMap, GeoJSONSource }
 import { buildBuyList, buildRows, download, toBuyCsv, toCsv } from "./core/export";
 import { fieldGeoJSON, fieldKml, type FieldMapInput } from "./core/fieldkml";
 import { leftNormals, nearestOnLine, resample, type Segment } from "./core/geom";
-import { estimateKp, fmtKm, formatKp, type KpMark } from "./core/kp";
+import { estimateKp, fmtKm, formatKp, parseKpInput, type KpMark } from "./core/kp";
 import { estimateCost, fmtUsd, judgeWindow, makeClient, MODELS, type ModelId } from "./core/judge";
+import { applyMain, applyReview, fixByHuman, idsToJudge, undoFix } from "./core/judgments";
 import { findHits, hitsToGeoJSON, segmentsToGeoJSON, type ParcelFeature } from "./core/parcels";
 import { PHOTO_YEARS, photoLayerLabel, renderSegmentCrop, renderWindow, windowsOf, type PhotoLayer } from "./core/photo";
 import { setZone, toLonLat, toPlane, zoneLabel, zoneOf, type EN, type LonLat } from "./core/proj";
 import { parseNamedBytes, parseTrackBytes, trackGeoJSON, trackKml } from "./core/track";
-import { computeTrack, DEFAULT_TRACK, describeTrack, legacyTrack, type TrackResult, type TrackSetting } from "./core/trackstate";
+import { computeTrack, DEFAULT_TRACK, describeTrack, legacyTrack, tiltZonesOf, type TrackResult, type TrackSetting } from "./core/trackstate";
 import { bladeHorizontal, DEFAULT_BAND, PRESETS, sweepMax, type PresetId, type TiltZone, type Vehicle } from "./core/vehicle";
 import { buildWalkMap, walkMapPageCount, type WalkMapInput } from "./core/walkmap";
 import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegments, forestText, noticeText, type ForestInfo, type SegmentForest } from "./core/forest";
@@ -33,7 +34,7 @@ import { isRealChange, kindLabel, NOT_LAND, type Confidence, type Judgment, type
 import type { MapReport, WorkerIn, WorkerOut, WorkerSource } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addDraft, addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, DEMO_MOJ, KIND_COLORS, setAttribution, setDraft, setGroupVisible, setPhotoYear, setSection, setSourceData, type LayerGroup } from "./map/map";
-import { buildLayout, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
+import { bottomCover, buildLayout, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
 
 /** 見本（小川村 県道401号）。組み込みの案件。「見本に戻す」と、版 1 の案件ファイルの中心線に使う */
 interface Demo {
@@ -437,7 +438,7 @@ function loadProject(state: AppState, p: ProjectFile) {
   loadForest(state);
   showSaveState(state);
   persist(state);
-  if (state.map.getSource("section")) state.map.fitBounds(bboxOfLonLat(p.centerline.coords) as LngLatBoundsLike, { padding: { top: 60, bottom: 60, left: leftCover() + 40, right: rightCover() + 40 }, duration: 600 });
+  if (state.map.getSource("section")) state.map.fitBounds(bboxOfLonLat(p.centerline.coords) as LngLatBoundsLike, { padding: { top: 60, bottom: bottomCover() + 60, left: leftCover() + 40, right: rightCover() + 40 }, duration: 600 });
 }
 
 /** 起立の区間は「起点から何 m」で持つので、中心線が変われば（反転でも）合わなくなる。消す */
@@ -1136,7 +1137,8 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
   const form = body.querySelector<HTMLFormElement>("[data-track-form]");
   form?.querySelector<HTMLSelectElement>('select[name="preset"]')?.addEventListener("change", (e) => {
     const preset = (e.target as HTMLSelectElement).value as PresetId;
-    const zones = state.track.source.kind === "vehicle" ? state.track.source.tiltZones : [];
+    // 起立の区間はリフターだけのもの。伸縮トレーラーに替えたら消す（残すと、欄が隠れたまま短いブレードで計算される。Codex の指摘 2026-11-06）
+    const zones = preset === "lifter" ? tiltZonesOf(state.track.source) : [];
     state.track = { ...state.track, source: { kind: "vehicle", preset, vehicle: { ...PRESETS[preset].vehicle }, tiltZones: zones } };
     rebuildTrack(state);
   });
@@ -1723,7 +1725,7 @@ async function runJudging(state: AppState) {
     if (run.cancel || stale()) return;
     const label = `${segs[0].fromM}〜${segs.at(-1)!.toM}m`;
     try {
-      const ids = segs.map((s) => s.id).filter((id) => state.judgments.get(id)?.by !== "人");
+      const ids = idsToJudge(segs.map((s) => s.id), state.judgments);
       if (!ids.length) {
         log(`窓 ${k + 1}（${label}）：全部人が直した区切りなので飛ばします`);
         return;
@@ -1741,12 +1743,7 @@ async function runJudging(state: AppState) {
       if (main.refused) {
         log(`!窓 ${k + 1}（${label}）：モデルが答えませんでした`);
       } else {
-        for (const j of main.judgments) {
-          if (state.judgments.get(j.segmentId)?.by === "人") continue; // 待っている間に人が直した区切りは上書きしない
-          state.judgments.set(j.segmentId, j);
-          state.unjudged.delete(j.segmentId);
-        }
-        for (const id of main.missing) if (!state.judgments.has(id)) state.unjudged.add(id);
+        applyMain(state.judgments, state.unjudged, main); // 待っている間に人が直した区切りは上書きしない（judgments.ts）
         log(`窓 ${k + 1}（${label}）：${main.judgments.length} 区切り${ids.length < segs.length ? `（人が直した ${segs.length - ids.length} は飛ばし）` : ""}、${Math.round(main.seconds)}秒、${fmtUsd(main.usd)}`);
         if (main.missing.length) log(`!窓 ${k + 1}：答えに無かった番号 ${main.missing.join("・")}（未判定のまま「確かめる所」に入れます）`);
         // 見直すのは確信「低」と、別の年の写真で変化のあった区切り（spec §8.4）
@@ -1755,13 +1752,7 @@ async function runJudging(state: AppState) {
           const rev = await judgeWindow(client, review, images, lows, second);
           if (stale()) return;
           run.usd += rev.usd;
-          let changed = 0;
-          for (const j of rev.judgments) {
-            const first = state.judgments.get(j.segmentId);
-            if (!first || first.by === "人") continue; // 主の判定が無い（答えに無かった）か、待っている間に人が直した
-            if (j.tree !== first.tree) changed++;
-            state.judgments.set(j.segmentId, { ...j, before: { tree: first.tree, conf: first.conf, model: first.model } });
-          }
+          const changed = applyReview(state.judgments, rev.judgments);
           log(`　見直し ${lows.length} 区切り（${MODELS[review]}）：${changed} 区切りで木の割合が変わりました、${fmtUsd(rev.usd)}`);
         }
       }
@@ -1928,8 +1919,8 @@ function placeKp(state: AppState, lonLat: [number, number]) {
   }
   const raw = prompt(`起点から ${near.index}m の所に距離標を置きます。距離標に書いてある値（km）を入れてください。例：12.3`);
   if (raw === null) return;
-  const kp = Number(raw.replace(/[^\d.]/g, ""));
-  if (!Number.isFinite(kp) || raw.trim() === "") {
+  const kp = parseKpInput(raw);
+  if (kp === null) {
     alert("数字で入れてください（例：12.3）");
     return;
   }
@@ -1987,7 +1978,7 @@ function clearSelection(state: AppState) {
 
 /** パネルに隠れていない範囲の真ん中に来るよう、余白を付けて飛ぶ */
 function flyTo(state: AppState, bounds: LngLatBoundsLike) {
-  state.map.fitBounds(bounds, { padding: { top: 60, bottom: 60, left: leftCover() + 40, right: rightCover() + 40 }, maxZoom: 19, duration: 600 });
+  state.map.fitBounds(bounds, { padding: { top: 60, bottom: bottomCover() + 60, left: leftCover() + 40, right: rightCover() + 40 }, maxZoom: 19, duration: 600 });
 }
 
 function treeOfParcel(state: AppState, h: ParcelHit): { tree: number; n: number } | null {
@@ -2176,11 +2167,6 @@ function fixForm(j: Judgment | undefined, open: boolean): string {
   </details>`;
 }
 
-function stripPrev(j: Judgment): Omit<Judgment, "prev"> {
-  const { prev: _prev, ...rest } = j;
-  return rest;
-}
-
 function wireFixForm(state: AppState, id: string) {
   const form = document.querySelector<HTMLFormElement>("#detail-body form[data-fix]");
   if (!form) return;
@@ -2190,17 +2176,13 @@ function wireFixForm(state: AppState, id: string) {
     const old = state.judgments.get(id);
     const kind = String(fd.get("kind"));
     const conf = String(fd.get("conf"));
-    const fixed: Judgment = {
+    const fixed = fixByHuman(old, {
       segmentId: id,
       tree: Number(fd.get("tree")),
       kind: (TREE_KINDS as string[]).includes(kind) ? (kind as TreeKind) : "なし",
-      other: old?.other ?? [],
       conf: (CONFS as string[]).includes(conf) ? (conf as Confidence) : "高",
-      why: String(fd.get("why") ?? "").trim() || "人が直した",
-      by: "人",
-      // 直す前の判定は 1 つだけ覚える（人が何度直しても、戻る先は Claude の判定）
-      prev: old ? (old.by === "人" && old.prev ? old.prev : stripPrev(old)) : undefined,
-    };
+      why: String(fd.get("why") ?? ""),
+    });
     state.judgments.set(id, fixed);
     state.unjudged.delete(id);
     refreshJudgments(state);
@@ -2209,9 +2191,9 @@ function wireFixForm(state: AppState, id: string) {
     selectSegment(state, id, false);
   });
   form.querySelector("[data-undo-fix]")?.addEventListener("click", () => {
-    const cur = state.judgments.get(id);
-    if (!cur?.prev) return;
-    state.judgments.set(id, { ...cur.prev });
+    const back = undoFix(state.judgments.get(id));
+    if (!back) return;
+    state.judgments.set(id, back);
     refreshJudgments(state);
     if (state.step === 5) renderStep(state);
     selectSegment(state, id, false);

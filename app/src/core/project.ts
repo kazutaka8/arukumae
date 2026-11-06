@@ -154,6 +154,8 @@ export function parseProject(text: string, demo: DemoCenterline): ProjectFile {
       }
       return { fromM: z.fromM, toM: z.toM, tilt: z.tilt };
     });
+    // 立てられるのはブレードリフターだけ。ほかの型に区間が付いたファイルは、区間を落として読む（trackstate.ts の tiltZonesOf と同じ決まり）
+    if (src.preset !== "lifter") src.tiltZones = [];
     const base = PRESETS[src.preset as keyof typeof PRESETS].vehicle as unknown as Record<string, number>;
     const given = isRecord(src.vehicle) ? src.vehicle : {};
     const vehicle: Record<string, number> = {};

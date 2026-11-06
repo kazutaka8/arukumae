@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateKp, formatKp } from "./kp";
+import { estimateKp, formatKp, parseKpInput } from "./kp";
 
 const marks = [
   { atM: 100, kp: 12.0 },
@@ -43,5 +43,20 @@ describe("estimateKp", () => {
   it("表示の形", () => {
     expect(formatKp("小川長野線", estimateKp(marks, 350))).toBe("小川長野線 12.25km 付近（推定）");
     expect(formatKp("小川長野線", null)).toBe("");
+  });
+});
+
+describe("parseKpInput（Codex の指摘 2026-11-06：全角の「１２．３」が 0 として記録された）", () => {
+  it("半角・全角・前後の字つきを km の数にする", () => {
+    expect(parseKpInput("12.3")).toBe(12.3);
+    expect(parseKpInput("１２．３")).toBe(12.3);
+    expect(parseKpInput(" 12 ")).toBe(12);
+    expect(parseKpInput("12.3km")).toBe(12.3);
+    expect(parseKpInput("１２．３ｋｍ")).toBe(12.3);
+    expect(parseKpInput("KP 0.5")).toBe(0.5);
+    expect(parseKpInput("0")).toBe(0);
+  });
+  it("数が 1 つに決まらない入力は断る（0 にしない）", () => {
+    for (const bad of ["", "   ", "じゅうに", "12,3", "1.2.3", "12 13", ".", "km"]) expect(parseKpInput(bad)).toBeNull();
   });
 });

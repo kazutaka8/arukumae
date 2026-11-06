@@ -32,12 +32,22 @@ export const DEFAULT_TRACK: TrackSetting = {
   band: { ...DEFAULT_BAND },
 };
 
+/**
+ * 計算と説明に使う起立の区間。立てられるのはブレードリフターだけで、伸縮トレーラーは水平のまま。
+ * リフターで区間を決めたあと車両の型を伸縮トレーラーに替えると、区間が残ったまま 55m のブレードが半分の長さで計算され、
+ * 編集の欄は隠れているので「水平」の表示のまま掃く範囲が狭く出た（拾う筆が漏れる側。Codex の指摘 2026-11-06）。
+ * 画面と案件ファイルの読み込みでも区間を消すが、どこから来ても狭く出ないように計算の入口でも外す
+ */
+export function tiltZonesOf(s: TrackSource): TiltZone[] {
+  return s.kind === "vehicle" && s.preset === "lifter" ? s.tiltZones : [];
+}
+
 export function computeTrack(dense: EN[], normals: EN[], t: TrackSetting): TrackResult {
   const curve = curveFlags(dense);
   let sweep: Sweep;
   switch (t.source.kind) {
     case "vehicle":
-      sweep = sweepVehicle(dense, normals, t.source.vehicle, t.source.tiltZones);
+      sweep = sweepVehicle(dense, normals, t.source.vehicle, tiltZonesOf(t.source));
       break;
     case "file":
       sweep = sweepFromLines(dense, normals, linesToPlane(t.source.lines));
@@ -61,7 +71,7 @@ export function describeTrack(t: TrackSetting): string {
   const tail = `＋余裕幅（直線 ${t.band.marginStraight}m・カーブ ${t.band.marginCurve}m）＋${t.band.cut}m`;
   switch (s.kind) {
     case "vehicle":
-      return `架空の軌跡図（${PRESETS[s.preset].name}、ブレード ${s.vehicle.bladeLength}m${s.vehicle.tilt ? `・${s.vehicle.tilt}° に立てる` : "・寝かせる"}${s.tiltZones.length ? `・起立の区間 ${s.tiltZones.length}` : ""}）${tail}`;
+      return `架空の軌跡図（${PRESETS[s.preset].name}、ブレード ${s.vehicle.bladeLength}m${s.vehicle.tilt ? `・${s.vehicle.tilt}° に立てる` : "・寝かせる"}${tiltZonesOf(s).length ? `・起立の区間 ${tiltZonesOf(s).length}` : ""}）${tail}`;
     case "file":
       return `軌跡図「${s.name}」${tail}`;
     case "band":
