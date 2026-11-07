@@ -34,7 +34,7 @@ import { isRealChange, kindLabel, NOT_LAND, type Confidence, type Judgment, type
 import type { MapReport, WorkerIn, WorkerOut, WorkerSource } from "./core/mojxml.worker";
 import { loadDemoJudgments, loadParcels, loadSection } from "./data/demo";
 import { addDraft, addKps, addParcels, addSection, addSegments, addTrack, applyJudgments, createMap, DEMO_MOJ, KIND_COLORS, setAttribution, setDraft, setGroupVisible, setPhotoYear, setSection, setSourceData, type LayerGroup } from "./map/map";
-import { bottomCover, buildLayout, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
+import { bottomCover, buildLayout, closeDetail, escapeHtml, help, hideBusy, leftCover, openDetail, renderSteps, rightCover, showBusy, showListTab, STEPS } from "./ui/panels";
 
 /** 見本（小川村 県道401号）。組み込みの案件。「見本に戻す」と、版 1 の案件ファイルの中心線に使う */
 interface Demo {
@@ -1626,12 +1626,20 @@ function fieldMapInput(state: AppState, day: string): FieldMapInput {
  */
 function changeTrack(state: AppState, next: TrackSetting): boolean {
   const same = JSON.stringify(next) === JSON.stringify(state.track);
+  // 判定が走っている間は変えない：戻ってきた答え（古い写真への答え）が、新しい番号の区切りに書かれてしまう（Codex の指摘 2026-11-07）
+  if (!same && state.run) {
+    alert("木の判定が走っている間は、車両・幅・起立の区間を変えられません。手順 4 で止めてから変えてください。");
+    return false;
+  }
   const lost = same ? [] : [state.judgments.size ? `判定 ${state.judgments.size}` : "", state.notes.size ? `現地の記録 ${state.notes.size}` : "", state.unjudged.size ? `未判定の印 ${state.unjudged.size}` : ""].filter(Boolean);
   if (lost.length && !confirm(`車両・幅・起立の区間を変えると区切りの形が変わるので、${lost.join("・")} を消して作り直します。車両や幅が違えば、別の案件です。\n残したいなら「キャンセル」して、先に手順 1 の「保存する（JSON）」で案件ファイルにしてください。\n消してよければ「OK」。`)) return false;
   if (lost.length) {
     state.judgments = new Map();
     state.notes = new Map();
     state.unjudged = new Set();
+    // 詳細欄に残った古い判定・記録のフォームを捨てる（「人の判定として記録する」で古い値が新しい区切りに付かないように）
+    clearSelection(state);
+    closeDetail();
   }
   state.track = next;
   rebuildTrack(state);

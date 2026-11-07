@@ -336,6 +336,13 @@ export function openDetail(title: string, html: string) {
   document.getElementById("detail-panel")!.classList.remove("collapsed");
 }
 
+/** 詳細欄を閉じて中身も捨てる（消した判定・記録の古いフォームから、登録し直せないように。Codex の指摘 2026-11-07） */
+export function closeDetail() {
+  document.getElementById("detail-title")!.textContent = "";
+  document.getElementById("detail-body")!.innerHTML = "";
+  document.getElementById("detail-panel")!.classList.add("collapsed");
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
