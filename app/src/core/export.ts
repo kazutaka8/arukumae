@@ -89,7 +89,8 @@ export function buildRows(
       決めたのは: js.length ? (js.some((j) => j.by === "人") ? (js.every((j) => j.by === "人") ? "人" : "人・Claude") : "Claude") : "",
       森林の区域: forest ? forestText(forest.get(h.parcelId)) : "",
       伐採の届出の目印: forest ? noticeText(forest.get(h.parcelId)) : "",
-      備考: [remark(js), js.length && segmentsOverlap(h) ? OVERLAP_NOTE : ""].filter(Boolean).join("。"),
+      // 判定のない区切りがある筆は、木のある面積が判定した区切りの分だけなので、必ず断る（Codex の指摘 2026-11-07。見本の 80 区切りの状態で起きる）
+      備考: [remark(js), js.length && js.length < h.segmentIds.length ? partialNote(h.segmentIds.length - js.length) : "", js.length && segmentsOverlap(h) ? OVERLAP_NOTE : ""].filter(Boolean).join("。"),
       地図: p.map,
     };
   });
@@ -169,9 +170,22 @@ export function toBuyCsv(rows: BuyRow[]): string {
   return csvOf(BUY_COLUMNS, rows);
 }
 
+export function partialNote(n: number): string {
+  return `判定のない区切り ${n}（木のある面積は、判定した区切りの分だけ）`;
+}
+
+/**
+ * 表計算で数式として読まれる値（= + - @ やタブで始まる文字）の頭に ' を付ける。案件ファイルの所在などは人が書けるので、
+ * 受け取った案件を書き出して Excel で開いたときに数式が動かないように（Codex の指摘 2026-11-07。CSV injection）。数は数のまま
+ */
+export function neutralizeCell(v: unknown): string {
+  const s = String(v ?? "");
+  return typeof v === "string" && /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+
 function csvOf<T extends object>(columns: (keyof T)[], rows: T[]): string {
   const esc = (v: unknown) => {
-    const s = String(v ?? "");
+    const s = neutralizeCell(v);
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [columns.join(","), ...rows.map((r) => columns.map((c) => esc(r[c])).join(","))];

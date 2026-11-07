@@ -191,7 +191,8 @@ def main():
                 "properties": {
                     "id": f"{xml.stem}:{f.get('id')}",
                     "map": xml.stem,
-                    "oaza": f.get("大字名"),
+                    # 所在は 大字名＋丁目名＋小字名（道具の本体 mojxml.ts と同じ。小川村には丁目名・小字名が無い）
+                    "oaza": "".join(x for x in (f.get("大字名"), f.get("丁目名"), f.get("小字名")) if x) or None,
                     "chiban": f.get("地番"),
                     "kind": kind(f.get("地番")),
                     "accuracy": f.get("精度区分"),

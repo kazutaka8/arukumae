@@ -92,6 +92,13 @@ describe("地図XML を読む", () => {
     }
   });
 
+  it("所在は 大字名＋丁目名＋小字名（あるものだけ続ける。Codex の指摘 2026-11-07）", () => {
+    const text = sampleXml("公共座標8系").replace("<大字名>大字稲丘</大字名><地番>4202</地番>", "<大字名>大字稲丘</大字名><丁目名>一丁目</丁目名><小字名>字富吉</小字名><地番>4202</地番>");
+    const m = parseMojxml(text, "20588-1000-6.xml");
+    expect(m.parcels.find((p) => p.id === "H1")!.oaza).toBe("大字稲丘一丁目字富吉");
+    expect(m.parcels.find((p) => p.id === "H2")!.oaza).toBe("大字稲丘"); // 丁目名・小字名の無い筆は大字名だけ
+  });
+
   it("任意座標系の地図は読めるが isPublic が false で、切り出しは空", () => {
     const m = parseMojxml(sampleXml("任意座標系"), "20588-1000-1.xml");
     expect(m.isPublic).toBe(false);

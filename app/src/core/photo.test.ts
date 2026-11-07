@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Segment } from "./geom";
-import { LATEST, PHOTO_YEARS, photoLayerLabel, photoTileTemplate, photoTileUrl, windowsOf } from "./photo";
+import { clearTileCache, fetchTile, LATEST, PHOTO_YEARS, photoLayerLabel, photoTileTemplate, photoTileUrl, windowsOf } from "./photo";
 
 function fakeSegments(pairs: number): Segment[] {
   const out: Segment[] = [];
@@ -11,6 +11,28 @@ function fakeSegments(pairs: number): Segment[] {
   }
   return out;
 }
+
+describe("写真のタイルの写し（Codex の指摘 2026-11-06・07）", () => {
+  it("取得の失敗（404 以外）は覚えずに取り直す。写真の無い所（404）は覚えて取り直さない", async () => {
+    clearTileCache();
+    const calls: string[] = [];
+    let fail = true;
+    const doFetch = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      if (String(url).includes("/1/")) return new Response(null, { status: 404 });
+      if (fail) return new Response(null, { status: 503 });
+      throw new Error("ここまでは来ない（成功の経路は createImageBitmap が要るので試さない）");
+    }) as typeof fetch;
+    expect(await fetchTile(18, 0, 0, "seamlessphoto", doFetch)).toBeNull(); // 503：失敗
+    expect(await fetchTile(18, 0, 0, "seamlessphoto", doFetch)).toBeNull(); // 取り直す（覚えていない）
+    expect(calls.filter((u) => u.includes("/0/0")).length).toBe(2);
+    fail = false;
+    expect(await fetchTile(18, 1, 0, "seamlessphoto", doFetch)).toBeNull(); // 404：写真が無い
+    expect(await fetchTile(18, 1, 0, "seamlessphoto", doFetch)).toBeNull();
+    expect(calls.filter((u) => u.includes("/1/0")).length).toBe(1); // 覚えているので 1 回だけ
+    clearTileCache();
+  });
+});
 
 describe("windowsOf", () => {
   it("145 対（1.45km）は 8 窓に均等に割れ、最後の窓だけ小さくならない", () => {

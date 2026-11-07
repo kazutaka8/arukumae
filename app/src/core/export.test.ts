@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRows, COLUMNS, toCsv } from "./export";
+import { neutralizeCell, OVERLAP_NOTE, partialNote, buildRows, COLUMNS, toCsv } from "./export";
 import type { Judgment, ParcelHit, ParcelProps } from "./types";
 
 const hit: ParcelHit = {
@@ -112,15 +112,43 @@ describe("公図を買うリスト", () => {
   });
 });
 
+describe("一部の区切りだけ判定した筆（Codex の指摘 2026-11-07）", () => {
+  it("判定のない区切りがあれば、備考に数と「判定した区切りの分だけ」の断りが出る。面積は判定した分の合計のまま", () => {
+    const one = new Map([["L032", j("L032", 100, "高")]]); // 4 区切りのうち 1 つだけ
+    const [r] = buildRows([hit], parcels, one, [], "道");
+    expect(r.備考).toBe(partialNote(3));
+    expect(r.木のある面積m2).toBe(hit.segAreas.L032); // L032 の面積 × 100%。判定のない 3 区切りは数えない
+    const [over] = buildRows([{ ...hit, areaM2: 100 }], parcels, one, [], "道");
+    expect(over.備考).toBe(`${partialNote(3)}。${OVERLAP_NOTE}`);
+  });
+});
+
+describe("CSV の数式の無害化（Codex の指摘 2026-11-07）", () => {
+  it("= + - @ タブで始まる文字は頭に ' が付く。数と、ふつうの文字はそのまま", () => {
+    expect(neutralizeCell("=1+1")).toBe("'=1+1");
+    expect(neutralizeCell("+SUM(A1)")).toBe("'+SUM(A1)");
+    expect(neutralizeCell("-2")).toBe("'-2");
+    expect(neutralizeCell("@cmd")).toBe("'@cmd");
+    expect(neutralizeCell("\t=x")).toBe("'\t=x");
+    expect(neutralizeCell(-2)).toBe("-2"); // 数はそのまま（面積などは数で出す）
+    expect(neutralizeCell("大字稲丘")).toBe("大字稲丘");
+    expect(neutralizeCell("道-1")).toBe("道-1");
+    const bad = new Map<string, { properties: ParcelProps }>([["m:1", { properties: { id: "m:1", map: "m", oaza: "=1+1", chiban: "2303-1", kind: "ふつう" } }]]);
+    const csv = toCsv(buildRows([hit], bad, new Map(), [], "道"));
+    expect(csv).toContain("'=1+1");
+    expect(csv).not.toContain(",=1+1");
+  });
+});
+
 describe("木のある面積の断り（spec §8.3。区切りが重なる筆）", () => {
   it("区切りの面積の合計がかかる面積を超える筆は、判定があれば備考に断りを出す。CSV に「地図」の列は出ない", async () => {
-    const { OVERLAP_NOTE } = await import("./export");
     const over: ParcelHit = { ...hit, areaM2: 100 }; // 区切りの合計は 150
-    const judged = new Map([["L032", j("L032", 100, "高")]]);
+    // 4 区切り全部に判定がある場合（判定のない区切りの断りは出ない）
+    const judged = new Map(["L032", "L033", "L034", "L035"].map((id) => [id, j(id, 100, "高")]));
     expect(buildRows([over], parcels, judged, [], "道")[0].備考).toBe(OVERLAP_NOTE);
     expect(buildRows([over], parcels, new Map(), [], "道")[0].備考).toBe(""); // 判定が無ければ木の面積も出ないので、断りも出さない
     expect(buildRows([hit], parcels, judged, [], "道")[0].備考).toBe(""); // 重なりが無い筆（合計 150 ＝ かかる面積 150）
-    const two = new Map([["L032", { ...j("L032", 100, "高"), oldYear: "2019", change: "変化なし" as const }]]);
+    const two = new Map(["L032", "L033", "L034", "L035"].map((id) => [id, { ...j(id, 100, "高"), oldYear: "2019", change: "変化なし" as const }]));
     expect(buildRows([over], parcels, two, [], "道")[0].備考).toBe(`2019 年度の写真と見比べて判定。${OVERLAP_NOTE}`);
     expect(COLUMNS).not.toContain("地図");
     expect(toCsv(buildRows([over], parcels, judged, [], "道")).split("\r\n")[0]).not.toContain("地図");

@@ -234,7 +234,9 @@ export class MojxmlParser {
         const shape = /<形状\s+idref="([^"]+)"/.exec(el);
         this.fude.push({
           id,
-          oaza: textIn(el, "大字名"),
+          // 所在は 大字名＋丁目名＋小字名（地図XML の正式な項目。見本の小川村には丁目名・小字名が無い）。丁目・小字で地番を分ける地域で、
+          // 別の土地が同じ所在・地番にまとまらないように（Codex の指摘 2026-11-06・07）。前処理（tools/cut_parcels.py）も同じ
+          oaza: [textIn(el, "大字名"), textIn(el, "丁目名"), textIn(el, "小字名")].filter((x): x is string => !!x).join("") || null,
           chiban: textIn(el, "地番") ?? "",
           shape: shape ? shape[1] : null,
           accuracy: textIn(el, "精度区分"),

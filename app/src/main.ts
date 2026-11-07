@@ -25,7 +25,7 @@ import { fetchForest, ForestIndex, forestMismatch, forestOfHits, forestOfSegment
 import { type Check, listChecks, REVIEW_GAP, treeText } from "./core/checks";
 import { CHECK_FILTERS, filterChecks, filterHits, HIT_FILTERS, type CheckFilter, type HitFilter } from "./core/filter";
 import { buildProject, describeCenterline, describeProject, mojAttribution, parseProject, projectFileName, type Centerline, type CenterlineSource, type MojSource, type ProjectFile } from "./core/project";
-import { clearLegacy, loadLegacy, loadStored, saveStored } from "./core/store";
+import { clearLegacy, lastLoadFailed, loadLegacy, loadStored, saveStored } from "./core/store";
 import { bboxOf as bboxOfLonLat, dedupe, lengthM, lineChoices, midpoint, pickCenterline, reversed, roadNameFromLine, validateCenterline, type LineChoice } from "./core/centerline";
 import { findMunicipalities, fmtMb, samplePoints, searchDataset, type MojDataset, type Municipality } from "./core/mojfetch";
 import { buildGraph, fetchRoads, roadNameOf, routeBbox, shortestPath, snapToRoad } from "./core/osmroute";
@@ -282,11 +282,23 @@ function demoProject(demo: Demo): ProjectFile {
  */
 async function loadInitialProject(demo: Demo): Promise<ProjectFile> {
   const demoLine = { coords: demo.coords, roadName: demo.roadName };
+  let stored: unknown = null;
   try {
-    const stored = await loadStored();
-    if (stored) return parseProject(JSON.stringify(stored), demoLine);
+    stored = await loadStored();
+    // 読み込みが失敗した（壊れていたのではなく、読めなかった）回は、端末に書かない。見本を開いたあとの編集が、残っている案件を上書きしないため
+    // （Codex の指摘 2026-11-06・07。読めないのが毎回なら、その環境では端末に残せないだけ）
+    if (lastLoadFailed()) storeReadOnly = true;
   } catch (e) {
-    console.warn("この端末に残した案件を読めなかったので、見本に戻します", e);
+    console.warn("この端末に残した案件を読めませんでした。見本に戻します", e);
+    storeReadOnly = true;
+  }
+  // 読めたが形が壊れている・知らない版のときは、見本に戻して端末には書く（書かないと、その端末では二度と残せなくなる）
+  if (stored) {
+    try {
+      return parseProject(JSON.stringify(stored), demoLine);
+    } catch (e) {
+      console.warn("この端末に残した案件の形が合わないので、見本に戻します", e);
+    }
   }
   const legacy = loadLegacy();
   if (legacy) {
@@ -348,12 +360,20 @@ function persist(state: AppState) {
   persistTimer = setTimeout(() => flushPersist(), 250);
 }
 
+/** 起動のときに端末の保存を読めなかったら true。その回は端末に書かない（loadInitialProject） */
+let storeReadOnly = false;
+
 function flushPersist() {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = null;
   const state = persistPending;
   persistPending = null;
   if (!state) return;
+  if (storeReadOnly) {
+    state.saveError = "起動のときに、この端末に残した案件を読めませんでした。残っている案件を上書きしないよう、この回は端末に残しません。ページを開き直すか、案件ファイルに保存してください";
+    showSaveState(state);
+    return;
+  }
   const p = currentProject(state);
   // 読めるものしか書かない：書く前に案件ファイルと同じ検めを通す。通らないものを書くと、次に開いたとき見本に戻って判定が消える
   try {
@@ -648,7 +668,7 @@ function renderStep(state: AppState) {
         if (state.pdfError) parts.push(`<p class="small err">${escapeHtml(state.pdfError)}</p>`);
       }
       parts.push(about(
-        `<p>一覧表の列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・現地の記録・決めたのは・森林の区域・伐採の届出の目印・備考。UTF-8（BOM）なので Excel がそのまま開けます。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`,
+        `<p>一覧表の列：起点からの距離・左右・道路名と KP（推定）・根拠・所在・地番・種類・かかる面積・木のある面積（推定）・樹種の目安・木以外・確信・現地で確かめる所・現地の記録・決めたのは・森林の区域・伐採の届出の目印・備考。UTF-8（BOM）なので Excel で開けます。ただし「1-1」のような地番は、そのまま開くと日付に変わることがあります。Excel の「データ」から取り込み、地番の列を文字列にすると確実です。${state.forest ? "" : "森林の区域はまだ読めていないので空になります。"}</p>`,
         `<p>現地マップ：かかる筆（かかる部分の形と吹き出し）・区切り（判定の色）・確かめる所の印・中心線と 100m ごとの点・距離標・伐採範囲の外側。iPad の Google Earth に入れると、現地を歩くときの地図になります。</p>`,
         `<p>持って歩く地図：索引図＋約 200m ずつのページ。航空写真を外すと線と色だけになります。</p>`,
       ));
@@ -1130,17 +1150,15 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
       return;
     }
     state.trackDraft = null;
-    if (kind === "vehicle") state.track = { ...state.track, source: { kind, preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] } };
-    else state.track = { ...state.track, source: { kind, halfWidth: 13 } };
-    rebuildTrack(state);
+    const next: TrackSetting = kind === "vehicle" ? { ...state.track, source: { kind, preset: "lifter", vehicle: { ...PRESETS.lifter.vehicle }, tiltZones: [] } } : { ...state.track, source: { kind, halfWidth: 13 } };
+    if (!changeTrack(state, next)) renderStep(state);
   });
   const form = body.querySelector<HTMLFormElement>("[data-track-form]");
   form?.querySelector<HTMLSelectElement>('select[name="preset"]')?.addEventListener("change", (e) => {
     const preset = (e.target as HTMLSelectElement).value as PresetId;
     // 起立の区間はリフターだけのもの。伸縮トレーラーに替えたら消す（残すと、欄が隠れたまま短いブレードで計算される。Codex の指摘 2026-11-06）
     const zones = preset === "lifter" ? tiltZonesOf(state.track.source) : [];
-    state.track = { ...state.track, source: { kind: "vehicle", preset, vehicle: { ...PRESETS[preset].vehicle }, tiltZones: zones } };
-    rebuildTrack(state);
+    if (!changeTrack(state, { ...state.track, source: { kind: "vehicle", preset, vehicle: { ...PRESETS[preset].vehicle }, tiltZones: zones } })) renderStep(state);
   });
   form?.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -1165,9 +1183,8 @@ function wireTrackStep(state: AppState, body: HTMLElement) {
     } else if (source.kind === "band") {
       source = { ...source, halfWidth: num("halfWidth", source.halfWidth) };
     }
-    state.track = { source, band };
     state.trackError = null;
-    rebuildTrack(state);
+    if (!changeTrack(state, { source, band })) renderStep(state);
   });
   const fileInput = body.querySelector<HTMLInputElement>("[data-track-file]");
   fileInput?.addEventListener("change", () => {
@@ -1220,8 +1237,7 @@ function wireTiltZones(state: AppState, body: HTMLElement) {
   if (state.track.source.kind !== "vehicle") return;
   const src = state.track.source;
   const setZones = (zones: TiltZone[]) => {
-    state.track = { ...state.track, source: { ...src, tiltZones: zones } };
-    rebuildTrack(state);
+    if (!changeTrack(state, { ...state.track, source: { ...src, tiltZones: zones } })) renderStep(state);
   };
   body.querySelectorAll<HTMLButtonElement>("[data-del-tilt]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -1285,18 +1301,17 @@ function placeTilt(state: AppState, lonLat: [number, number]) {
   if (!z) return alert("角度は 0〜80 の数で、区間は 1m 以上にしてください");
   state.placingTilt = null;
   state.map.getCanvas().style.cursor = "";
-  state.track = { ...state.track, source: { ...state.track.source, tiltZones: addZone(state.track.source.tiltZones, z) } };
-  rebuildTrack(state);
+  if (!changeTrack(state, { ...state.track, source: { ...state.track.source, tiltZones: addZone(state.track.source.tiltZones, z) } })) renderStep(state);
 }
 
 async function readTrackFile(state: AppState, f: File) {
   try {
     const lines = parseTrackBytes(f.name, new Uint8Array(await f.arrayBuffer()));
     if (!lines.length) throw new Error(`${f.name} に線や多角形がありません`);
-    state.track = { ...state.track, source: { kind: "file", name: f.name, lines } };
     state.trackError = null;
     state.trackDraft = null;
-    rebuildTrack(state); // 覆いの確認（別の道の軌跡図かどうか）は rebuildTrackNow の中。計算が後回しなので、ここで結果は読めない
+    // 覆いの確認（別の道の軌跡図かどうか）は rebuildTrackNow の中。計算が後回しなので、ここで結果は読めない
+    if (!changeTrack(state, { ...state.track, source: { kind: "file", name: f.name, lines } })) renderStep(state);
   } catch (e) {
     state.trackError = (e as Error).message;
     renderStep(state);
@@ -1603,6 +1618,26 @@ function fieldMapInput(state: AppState, day: string): FieldMapInput {
   };
 }
 
+/**
+ * 軌跡（車両・幅・起立の区間・軌跡図のファイル）を変える。区切りの形が変わると、区切りの番号で持っている判定・現地の記録・未判定の印が
+ * 別の地面を指すことになるので、残さずに作り直す（2026-11-07 に開発者が決めた：車両や幅が違えば別の案件。前の「同じ番号で流用し、
+ * 形が大きく変わった区切りに要再判定の印」（§17.2）はやめた。Codex の指摘 2026-11-07：番号の付け直しで、前半だけの判定が後半に付く）。
+ * 消える前に確かめ、案件ファイルへの保存を案内する。やめれば何も変えない（false）。同じ値のままなら、確かめずに作り直すだけ
+ */
+function changeTrack(state: AppState, next: TrackSetting): boolean {
+  const same = JSON.stringify(next) === JSON.stringify(state.track);
+  const lost = same ? [] : [state.judgments.size ? `判定 ${state.judgments.size}` : "", state.notes.size ? `現地の記録 ${state.notes.size}` : "", state.unjudged.size ? `未判定の印 ${state.unjudged.size}` : ""].filter(Boolean);
+  if (lost.length && !confirm(`車両・幅・起立の区間を変えると区切りの形が変わるので、${lost.join("・")} を消して作り直します。車両や幅が違えば、別の案件です。\n残したいなら「キャンセル」して、先に手順 1 の「保存する（JSON）」で案件ファイルにしてください。\n消してよければ「OK」。`)) return false;
+  if (lost.length) {
+    state.judgments = new Map();
+    state.notes = new Map();
+    state.unjudged = new Set();
+  }
+  state.track = next;
+  rebuildTrack(state);
+  return true;
+}
+
 /** 筆を入れ替え、かかる筆・森林・一覧・地図を作り直す */
 function applyParcels(state: AppState, parcels: ParcelFeature[]) {
   for (const h of state.hits) featureState(state, { source: "parcels", id: h.parcelId }, { hit: false });
@@ -1735,6 +1770,13 @@ async function runJudging(state: AppState) {
         return;
       }
       const images = await renderWindow(segs);
+      // 最新写真が半分も取れない窓（通信が切れた・取得先が止まった）は送らない：欠けた写真で費用だけかかり、答えも当てにならない
+      // （Codex の指摘 2026-11-06・07）。その区切りは未判定の印を付けて「確かめる所」に残し、通信が戻ってから判定し直せるようにする
+      if (images.coverage < 0.5) {
+        for (const id of ids) state.unjudged.add(id);
+        log(`!窓 ${k + 1}（${label}）：航空写真が半分も取れなかったので、Claude に送りません（費用はかかっていません）。通信を確かめて、もう一度`);
+        return;
+      }
       // 別の年の写真（F11）。その年の写真がこの窓に 1 枚もなければ、1 枚だけで判定する
       let second = photo2 ? await renderWindow(segs, photo2) : undefined;
       if (second && second.coverage === 0) {

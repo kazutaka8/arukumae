@@ -50,8 +50,16 @@ function request<T>(r: IDBRequest<T>): Promise<T> {
  * 直すなら：読み込みの失敗と「まだ無い」を分けて返し、失敗した回は端末に書かずに「開き直してください」と出す。
  * そのとき、IndexedDB が元から使えない環境では毎回が「失敗」になり、localStorage への落とし先が使えなくなる点を決める
  */
+let loadFailed = false;
+
+/** 直前の loadStored で、IndexedDB の読み込みが失敗したか（「まだ無い」とは別。失敗した回は端末に書かない。main.ts） */
+export function lastLoadFailed(): boolean {
+  return loadFailed;
+}
+
 export async function loadStored(): Promise<unknown | null> {
   let fromDb: unknown = null;
+  loadFailed = false;
   if (hasIdb()) {
     try {
       const db = await openDb();
@@ -61,6 +69,7 @@ export async function loadStored(): Promise<unknown | null> {
         db.close();
       }
     } catch (e) {
+      loadFailed = true;
       console.warn("IndexedDB から読めませんでした。localStorage を見ます", e);
     }
   }

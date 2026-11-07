@@ -59,25 +59,34 @@ export function metersPerPx(lat: number, z = Z): number {
   return (40_075_016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * TILE);
 }
 
-// タイルの写しはページを開いている間だけ持つ。同じ窓を判定し直すときに、もう一度取りに行かないため
-// 【分かっている穴。提出のあとに直す（2026-11-06 に見送りと決めた。docs/spec.md §14）】
-// 取得の失敗（通信が切れた・取得先が一時的に止まった）も null として覚えるので、通信が戻っても同じタイルを取り直さない。
-// 判定の側（main.ts の runJudging）は最新写真の欠け（coverage）を見ずに Claude へ送るので、欠けた写真のまま費用がかかる。
-// 直すなら：失敗は覚えない（r.ok でない・例外のときは tileCache から外す）。写真が欠けた窓は判定せず、未判定に残す。
-// 写真が元から無い所（海など）と、取得の失敗を分ける手がかりは HTTP の 404 とそれ以外
+// タイルの写しはページを開いている間だけ持つ。同じ窓を判定し直すときに、もう一度取りに行かないため。
+// 写真が元から無い所（海など。HTTP 404）は null として覚える。取得の失敗（通信が切れた・取得先が一時的に止まった・それ以外の HTTP の誤り）は
+// 覚えずに写しから外し、次に要るときに取り直す（2026-11-07。Codex の指摘 2026-11-06・07：失敗を覚えたまま、欠けた写真で判定に送っていた）。
+// 欠けた窓を判定に送らないのは main.ts の runJudging（coverage が半分未満なら送らない）
 const tileCache = new Map<string, Promise<ImageBitmap | null>>();
 
-export function fetchTile(z: number, x: number, y: number, layer: PhotoLayer = LATEST): Promise<ImageBitmap | null> {
+export function fetchTile(z: number, x: number, y: number, layer: PhotoLayer = LATEST, doFetch: typeof fetch = fetch): Promise<ImageBitmap | null> {
   const key = `${layer}/${z}/${x}/${y}`;
   let p = tileCache.get(key);
   if (!p) {
-    p = fetch(photoTileUrl(layer, z, x, y))
-      .then((r) => (r.ok ? r.blob() : null))
-      .then((b) => (b ? createImageBitmap(b) : null))
-      .catch(() => null); // 写真のない所（海など）は黒のまま。判定は「低」になるだけで、止めない
+    p = doFetch(photoTileUrl(layer, z, x, y))
+      .then(async (r) => {
+        if (r.status === 404) return null; // 写真のない所（海など）は黒のまま。判定は「低」になるだけで、止めない
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return createImageBitmap(await r.blob());
+      })
+      .catch(() => {
+        tileCache.delete(key);
+        return null;
+      });
     tileCache.set(key, p);
   }
   return p;
+}
+
+/** 試験用：写しを空にする */
+export function clearTileCache() {
+  tileCache.clear();
 }
 
 /** 区切りの集まりを、札なし・札ありの画像にする */
